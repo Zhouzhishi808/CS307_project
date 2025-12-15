@@ -19,34 +19,7 @@ import java.sql.Connection;
 import java.sql.ResultSet;
 import java.util.List;
 
-/**
- * 密码存储和验证设计说明
- * ================================
- *
- * 根据 AuthInfo.java 的设计要求：
- *
- * 1. 密码验证职责划分：
- *    - UserService：必须验证密码（register, login, deleteAccount, updateProfile）
- *    - 其他服务（RecipeService, ReviewService等）：不应验证密码，只需验证：
- *      a) authorId 对应的用户存在
- *      b) 用户是活跃的（未被软删除）
- *
- * 2. 密码存储建议（当前未实现，需要在UserService中完成）：
- *    - 使用 BCrypt 哈希算法（推荐）：
- *      例如：BCrypt.hashpw(plainPassword, BCrypt.gensalt())
- *    - 或使用 PBKDF2、Argon2 等安全哈希算法
- *    - 绝不直接存储明文密码
- *
- * 3. 当前实现状态：
- *    - users 表包含 Password VARCHAR(255) 字段
- *    - importUsers() 方法直接存储密码（数据集中为 null）
- *    - TODO: 在 UserServiceImpl 中实现密码哈希和验证逻辑
- *
- * 4. 开发/测试期间的替代方案：
- *    - 由于数据集不包含密码，可以：
- *      a) 在注册时要求用户设置密码并哈希存储
- *      b) 在开发期间使用简化的认证逻辑（如仅验证 authorId）
- */
+
 
 /**
  * It's important to mark your implementation class with {@link Service} annotation.
@@ -69,7 +42,7 @@ public class DatabaseServiceImpl implements DatabaseService {
     @Override
     public List<Integer> getGroupMembers() {
         //replace this with your own student IDs in your group
-        return Arrays.asList(12000000);
+        return Arrays.asList(12413009);
     }
 
     @Autowired
@@ -86,22 +59,11 @@ public class DatabaseServiceImpl implements DatabaseService {
         createTables();
 
         // TODO: implement your import logic
-        // 1. 导入用户 (无外键依赖)
         importUsers(userRecords);
-
-        // 2. 导入用户关注关系
         importUserFollows(userRecords);
-
-        // 3. 导入菜谱 (依赖users)
         importRecipes(recipeRecords);
-
-        // 4. 导入菜谱食材 (依赖recipes)
         importRecipeIngredients(recipeRecords);
-
-        // 5. 导入评论 (依赖users和recipes)
         importReviews(reviewRecords);
-
-        // 6. 导入评论点赞 (依赖reviews和users)
         importReviewLikes(reviewRecords);
 
         createTriggers();
@@ -110,7 +72,7 @@ public class DatabaseServiceImpl implements DatabaseService {
     }
 
     public void createTriggers() {
-        String t1= "CREATE OR REPLACE FUNCTION update_follow_counts()\n" +
+    String t1= "CREATE OR REPLACE FUNCTION update_follow_counts()\n" +
                 "RETURNS TRIGGER AS $$\n" +
                 "BEGIN\n" +
                 "    IF TG_OP = 'INSERT' THEN\n" +
@@ -504,10 +466,12 @@ public class DatabaseServiceImpl implements DatabaseService {
 
     @Override
     public void drop() {
-        // You can use the default drop script provided by us in most cases,
-        // but if it doesn't work properly, you may need to modify it.
-        // This method will delete all the tables in the public schema.
-
+        jdbcTemplate.execute("DROP TRIGGER IF EXISTS trg_update_follow_counts ON user_follows");
+        jdbcTemplate.execute("DROP TRIGGER IF EXISTS trg_refresh_recipe_rating ON reviews");
+        jdbcTemplate.execute("DROP FUNCTION IF EXISTS update_follow_counts() CASCADE");
+        jdbcTemplate.execute("DROP FUNCTION IF EXISTS refresh_recipe_rating() CASCADE");
+        jdbcTemplate.execute("DROP VIEW IF EXISTS v_user_full_info CASCADE");
+        jdbcTemplate.execute("DROP VIEW IF EXISTS v_recipe_full_info CASCADE");
         String sql = "DO $$\n" +
                 "DECLARE\n" +
                 "    tables CURSOR FOR\n" +
@@ -520,13 +484,14 @@ public class DatabaseServiceImpl implements DatabaseService {
                 "        EXECUTE 'DROP TABLE IF EXISTS ' || QUOTE_IDENT(t.tablename) || ' CASCADE;';\n" +
                 "    END LOOP;\n" +
                 "END $$;\n";
-
         try (Connection conn = dataSource.getConnection();
              PreparedStatement stmt = conn.prepareStatement(sql)) {
             stmt.executeUpdate();
         } catch (SQLException e) {
             throw new RuntimeException(e);
         }
+        // jdbcTemplate.execute("DROP EXTENSION IF EXISTS pg_trgm CASCADE");
+        log.info("Successfully dropped all database objects (triggers, functions, views, indexes, tables)");
     }
 
     @Override
