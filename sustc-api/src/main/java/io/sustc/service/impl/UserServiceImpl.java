@@ -248,6 +248,7 @@ public class UserServiceImpl implements UserService {
             "INNER JOIN user_follows uf ON r.AuthorId = uf.FollowingId " +
             "WHERE uf.FollowerId = ?"
         );
+
         StringBuilder dataSql = new StringBuilder(
             "SELECT r.RecipeId, r.Name, r.AuthorId, u.AuthorName, r.DatePublished, r.AggregatedRating, r.ReviewCount " +
             "FROM recipes r " +
