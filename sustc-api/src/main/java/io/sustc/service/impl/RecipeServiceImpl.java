@@ -54,16 +54,8 @@ public class RecipeServiceImpl implements RecipeService {
             // 2. 查询食谱基本信息
             String sql = "SELECT * FROM recipes WHERE RecipeId = ?";
             RecipeRecord recipe = jdbcTemplate.queryForObject(sql, (rs, rowNum) -> {
-                return mapResultSetToRecipeRecord(rs);
+                return mapResultSetToRecipeRecord(rs, true);  // 获取食材
             }, recipeId);
-
-            if (recipe == null) {
-                return null;
-            }
-
-            // 3. 查询并设置食材列表
-            String[] ingredients = getRecipeIngredientsArray(recipeId);
-            recipe.setRecipeIngredientParts(ingredients);
 
             return recipe;
 
@@ -75,8 +67,13 @@ public class RecipeServiceImpl implements RecipeService {
         }
     }
 
-    // 辅助方法：将 ResultSet 映射到 RecipeRecord
+    // 重写 mapResultSetToRecipeRecord 方法以处理所有字段
     private RecipeRecord mapResultSetToRecipeRecord(ResultSet rs) throws SQLException {
+        return mapResultSetToRecipeRecord(rs, true);
+    }
+
+    // 重载方法，可以控制是否查询食材
+    private RecipeRecord mapResultSetToRecipeRecord(ResultSet rs, boolean fetchIngredients) throws SQLException {
         RecipeRecord recipe = new RecipeRecord();
 
         // 设置基本字段
@@ -91,29 +88,59 @@ public class RecipeServiceImpl implements RecipeService {
         recipe.setRecipeCategory(rs.getString("RecipeCategory"));
 
         // 处理评分（可能为null）
-        recipe.setAggregatedRating(getNullableFloat(rs, "AggregatedRating"));
+        Float aggregatedRating = getNullableFloat(rs, "AggregatedRating");
+        recipe.setAggregatedRating(aggregatedRating != null ? aggregatedRating : 0.0f);
         recipe.setReviewCount(rs.getInt("ReviewCount"));
 
         // 处理营养信息（可能为null）
-        recipe.setCalories(getNullableFloat(rs, "Calories"));
-        recipe.setFatContent(getNullableFloat(rs, "FatContent"));
-        recipe.setSaturatedFatContent(getNullableFloat(rs, "SaturatedFatContent"));
-        recipe.setCholesterolContent(getNullableFloat(rs, "CholesterolContent"));
-        recipe.setSodiumContent(getNullableFloat(rs, "SodiumContent"));
-        recipe.setCarbohydrateContent(getNullableFloat(rs, "CarbohydrateContent"));
-        recipe.setFiberContent(getNullableFloat(rs, "FiberContent"));
-        recipe.setSugarContent(getNullableFloat(rs, "SugarContent"));
-        recipe.setProteinContent(getNullableFloat(rs, "ProteinContent"));
+        recipe.setCalories(getSafeFloat(rs, "Calories"));
+        recipe.setFatContent(getSafeFloat(rs, "FatContent"));
+        recipe.setSaturatedFatContent(getSafeFloat(rs, "SaturatedFatContent"));
+        recipe.setCholesterolContent(getSafeFloat(rs, "CholesterolContent"));
+        recipe.setSodiumContent(getSafeFloat(rs, "SodiumContent"));
+        recipe.setCarbohydrateContent(getSafeFloat(rs, "CarbohydrateContent"));
+        recipe.setFiberContent(getSafeFloat(rs, "FiberContent"));
+        recipe.setSugarContent(getSafeFloat(rs, "SugarContent"));
+        recipe.setProteinContent(getSafeFloat(rs, "ProteinContent"));
 
-        recipe.setRecipeServings(rs.getInt("RecipeServings"));
+        // 处理servings（可能为null）
+        Integer servings = getNullableInt(rs, "RecipeServings");
+        recipe.setRecipeServings(servings != null ? servings : 0);
+
         recipe.setRecipeYield(rs.getString("RecipeYield"));
+
+        // 如果需要，获取并设置食材列表
+        if (fetchIngredients) {
+            long recipeId = rs.getLong("RecipeId");
+            String[] ingredients = getRecipeIngredientsArray(recipeId);
+            recipe.setRecipeIngredientParts(ingredients);
+        }
 
         return recipe;
     }
 
     // 辅助方法：安全获取可能为null的float值
+    // 辅助方法：安全获取可能为null的Float值（包装类型）
     private Float getNullableFloat(ResultSet rs, String columnName) throws SQLException {
         float value = rs.getFloat(columnName);
+        return rs.wasNull() ? null : value;
+    }
+
+    // 辅助方法：安全获取可能为null的float值，转换为原始float类型（不可为null）
+    private float getSafeFloat(ResultSet rs, String columnName) throws SQLException {
+        Float value = getNullableFloat(rs, columnName);
+        return value != null ? value : 0.0f;
+    }
+
+    // 辅助方法：安全获取可能为null的Integer值
+    private Integer getNullableInt(ResultSet rs, String columnName) throws SQLException {
+        int value = rs.getInt(columnName);
+        return rs.wasNull() ? null : value;
+    }
+
+    // 辅助方法：安全获取可能为null的String值
+    private String getNullableString(ResultSet rs, String columnName) throws SQLException {
+        String value = rs.getString(columnName);
         return rs.wasNull() ? null : value;
     }
 
@@ -123,6 +150,9 @@ public class RecipeServiceImpl implements RecipeService {
 
         try {
             List<String> ingredientsList = jdbcTemplate.queryForList(sql, String.class, recipeId);
+            if (ingredientsList == null) {
+                return new String[0];
+            }
             return ingredientsList.toArray(new String[0]);
         } catch (Exception e) {
             log.debug("Error getting ingredients for recipe {}: {}", recipeId, e.getMessage());
