@@ -34,7 +34,8 @@ public class DatabaseServiceImpl implements DatabaseService {
      * <p>
      * Marking a field with {@link Autowired} annotation enables our framework to automatically
      * provide you a well-configured instance of {@link DataSource}.
-     * Learn more: <a href="https://www.baeldung.com/spring-dependency-injection">Dependency Injection</a>
+     * Learn more: <a href="https://www.baeldung.com/spring-depen
+     * dency-injection">Dependency Injection</a>
      */
     @Autowired
     private DataSource dataSource;
@@ -185,8 +186,6 @@ public class DatabaseServiceImpl implements DatabaseService {
         for (String sql : indexSQLs) {
             jdbcTemplate.execute(sql);
         }
-
-        log.info("Created {} indexes", indexSQLs.length);
     }
 
 
@@ -214,8 +213,6 @@ public class DatabaseServiceImpl implements DatabaseService {
                 return userRecords.size();
             }
         });
-
-        log.info("Imported {} users", userRecords.size());
     }
 
     private void importUserFollows(List<UserRecord> userRecords) {
@@ -234,8 +231,6 @@ public class DatabaseServiceImpl implements DatabaseService {
                     "VALUES (?, ?) ON CONFLICT DO NOTHING";
             jdbcTemplate.batchUpdate(sql, followBatch);
         }
-
-        log.info("Imported {} follow relationships", followBatch.size());
     }
 
 
@@ -288,8 +283,6 @@ public class DatabaseServiceImpl implements DatabaseService {
                 return recipeRecords.size();
             }
         });
-
-        log.info("Imported {} recipes", recipeRecords.size());
     }
 
     private void setFloatOrNull(PreparedStatement ps, int index, float value) throws SQLException {
@@ -317,8 +310,6 @@ public class DatabaseServiceImpl implements DatabaseService {
                     "VALUES (?, ?) ON CONFLICT DO NOTHING";
             jdbcTemplate.batchUpdate(sql, ingredientBatch);
         }
-
-        log.info("Imported {} recipe ingredients", ingredientBatch.size());
     }
 
     private void importReviews(List<ReviewRecord> reviewRecords) {
@@ -343,7 +334,6 @@ public class DatabaseServiceImpl implements DatabaseService {
                 return reviewRecords.size();
             }
         });
-        log.info("Imported {} reviews", reviewRecords.size());
     }
 
     private void importReviewLikes(List<ReviewRecord> reviewRecords) {
@@ -364,8 +354,6 @@ public class DatabaseServiceImpl implements DatabaseService {
                     "VALUES (?, ?) ON CONFLICT DO NOTHING";
             jdbcTemplate.batchUpdate(sql, likesBatch);
         }
-
-        log.info("Imported {} review likes", likesBatch.size());
     }
 
     private void createTables() {
@@ -491,7 +479,6 @@ public class DatabaseServiceImpl implements DatabaseService {
             throw new RuntimeException(e);
         }
         // jdbcTemplate.execute("DROP EXTENSION IF EXISTS pg_trgm CASCADE");
-        log.info("Successfully dropped all database objects (triggers, functions, views, indexes, tables)");
     }
 
     @Override
