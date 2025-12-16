@@ -254,15 +254,6 @@ public class ReviewServiceImpl implements ReviewService {
         }
     }
 
-    // 辅助方法：用户认证
-    private long authenticateUser(AuthInfo auth) {
-        long userId = userService.login(auth);
-        if (userId == -1L) {
-            throw new SecurityException("Invalid user credentials or inactive account");
-        }
-        return userId;
-    }
-
     // 辅助方法：验证删除评论的业务规则
     private void validateDeleteReviewBusinessRules(long userId, long reviewId, long recipeId) {
         // 验证评论是否存在
@@ -368,18 +359,416 @@ public class ReviewServiceImpl implements ReviewService {
     @Override
     @Transactional
     public long likeReview(AuthInfo auth, long reviewId) {
-        throw new UnsupportedOperationException("Not implemented yet");
+        final String METHOD_NAME = "likeReview";
+        log.debug("[{}] Starting - reviewId: {}, user: {}",
+                METHOD_NAME, reviewId, auth != null ? auth.getAuthorId() : "null");
+
+        try {
+            // === 1. 参数验证 ===
+            validateLikeReviewParameters(auth, reviewId);
+
+            // === 2. 用户认证 ===
+            long userId = authenticateUser(auth);
+
+            // === 3. 业务规则验证 ===
+            validateLikeReviewBusinessRules(userId, reviewId);
+
+            // === 4. 执行点赞操作 ===
+            long totalLikes = performLikeReview(userId, reviewId);
+
+            // === 5. 记录成功日志 ===
+            logSuccessfulLike(reviewId, userId, totalLikes);
+
+            log.debug("[{}] Completed successfully, total likes: {}", METHOD_NAME, totalLikes);
+            return totalLikes;
+
+        } catch (SecurityException | IllegalArgumentException e) {
+            log.warn("[{}] Failed due to business rule violation: {}", METHOD_NAME, e.getMessage());
+            throw e;
+        } catch (Exception e) {
+            log.error("[{}] Failed unexpectedly: {}", METHOD_NAME, e.getMessage(), e);
+            throw new RuntimeException("Failed to like review: " + e.getMessage(), e);
+        }
+    }
+
+    // 辅助方法：验证点赞评论的参数
+    private void validateLikeReviewParameters(AuthInfo auth, long reviewId) {
+        if (auth == null) {
+            throw new IllegalArgumentException("Authentication info is required");
+        }
+
+        if (auth.getAuthorId() <= 0) {
+            throw new IllegalArgumentException("Invalid user ID");
+        }
+
+        if (auth.getPassword() == null || auth.getPassword().trim().isEmpty()) {
+            throw new IllegalArgumentException("Password is required for user validation");
+        }
+
+        if (reviewId <= 0) {
+            throw new IllegalArgumentException("Invalid review ID");
+        }
+    }
+
+    // 辅助方法：用户认证
+    private long authenticateUser(AuthInfo auth) {
+        long userId = userService.login(auth);
+        if (userId == -1L) {
+            throw new SecurityException("Invalid user credentials or inactive account");
+        }
+        return userId;
+    }
+
+    // 辅助方法：验证点赞评论的业务规则
+    private void validateLikeReviewBusinessRules(long userId, long reviewId) {
+        // 验证评论是否存在
+        if (!permissionUtils.reviewExists(reviewId)) {
+            throw new IllegalArgumentException("Review with ID " + reviewId + " does not exist");
+        }
+
+        // 获取评论信息，验证用户不是评论作者
+        ReviewInfo reviewInfo = getReviewInfo(reviewId);
+        if (reviewInfo == null) {
+            throw new IllegalArgumentException("Review with ID " + reviewId + " does not exist");
+        }
+
+        // 验证用户不能给自己的评论点赞
+        if (reviewInfo.getAuthorId() == userId) {
+            throw new SecurityException("User cannot like their own review");
+        }
+    }
+
+    // 内部类：评论信息
+    private static class ReviewInfo {
+        private long authorId;
+        private long recipeId;
+
+        public ReviewInfo(long authorId, long recipeId) {
+            this.authorId = authorId;
+            this.recipeId = recipeId;
+        }
+
+        public long getAuthorId() { return authorId; }
+        public long getRecipeId() { return recipeId; }
+    }
+
+    // 辅助方法：获取评论信息
+    private ReviewInfo getReviewInfo(long reviewId) {
+        String sql = "SELECT AuthorId, RecipeId FROM reviews WHERE ReviewId = ?";
+
+        try {
+            return jdbcTemplate.queryForObject(sql, (rs, rowNum) -> {
+                long authorId = rs.getLong("AuthorId");
+                long recipeId = rs.getLong("RecipeId");
+                return new ReviewInfo(authorId, recipeId);
+            }, reviewId);
+        } catch (EmptyResultDataAccessException e) {
+            return null;
+        }
+    }
+
+    // 辅助方法：执行点赞操作
+    private long performLikeReview(long userId, long reviewId) {
+        // 检查是否已经点赞
+        if (hasUserLikedReview(userId, reviewId)) {
+            // 如果已经点赞，直接返回当前点赞数（幂等操作）
+            long currentLikes = getReviewLikeCount(reviewId);
+            log.debug("User {} has already liked review {}, returning current like count: {}",
+                    userId, reviewId, currentLikes);
+            return currentLikes;
+        }
+
+        // 插入点赞记录
+        insertLike(userId, reviewId);
+
+        // 返回新的总点赞数
+        return getReviewLikeCount(reviewId);
+    }
+
+    // 辅助方法：插入点赞记录
+    private void insertLike(long userId, long reviewId) {
+        String sql = "INSERT INTO review_likes (AuthorId, ReviewId) VALUES (?, ?)";
+
+        try {
+            int rowsInserted = jdbcTemplate.update(sql, userId, reviewId);
+
+            if (rowsInserted != 1) {
+                throw new RuntimeException(
+                        "Failed to insert like for review " + reviewId +
+                                " by user " + userId + " - unexpected row count: " + rowsInserted
+                );
+            }
+
+            log.debug("Successfully inserted like for review {} by user {}", reviewId, userId);
+
+        } catch (Exception e) {
+            // 如果是唯一约束冲突（用户已经点赞），忽略这个异常
+            if (e.getMessage() != null && e.getMessage().contains("duplicate key")) {
+                log.debug("User {} has already liked review {}, ignoring duplicate", userId, reviewId);
+                return;
+            }
+
+            log.error("Database error when inserting like for review {} by user {}: {}",
+                    reviewId, userId, e.getMessage(), e);
+            throw new RuntimeException("Database error while inserting like: " + e.getMessage(), e);
+        }
+    }
+
+    // 辅助方法：获取评论的点赞数
+    private long getReviewLikeCount(long reviewId) {
+        String sql = "SELECT COUNT(*) FROM review_likes WHERE ReviewId = ?";
+
+        try {
+            Long count = jdbcTemplate.queryForObject(sql, Long.class, reviewId);
+            return count != null ? count : 0;
+        } catch (Exception e) {
+            log.error("Error getting like count for review {}: {}", reviewId, e.getMessage());
+            return 0;
+        }
+    }
+
+    // 辅助方法：记录成功的点赞操作
+    private void logSuccessfulLike(long reviewId, long userId, long totalLikes) {
+        log.info("User {} liked review {}. Total likes: {}", userId, reviewId, totalLikes);
     }
 
     @Override
     @Transactional
     public long unlikeReview(AuthInfo auth, long reviewId) {
-        throw new UnsupportedOperationException("Not implemented yet");
+        log.debug("Starting unlikeReview for reviewId: {}, user: {}",
+                reviewId, auth != null ? auth.getAuthorId() : "null");
+
+        try {
+            // === 1. 参数验证 ===
+            if (auth == null) {
+                throw new IllegalArgumentException("Authentication info is required");
+            }
+
+            if (reviewId <= 0) {
+                throw new IllegalArgumentException("Invalid review ID");
+            }
+
+            // === 2. 用户认证 ===
+            long userId = userService.login(auth);
+            if (userId == -1L) {
+                throw new SecurityException("Invalid user credentials or inactive account");
+            }
+
+            // === 3. 验证评论存在性 ===
+            if (!permissionUtils.reviewExists(reviewId)) {
+                throw new IllegalArgumentException("Review does not exist");
+            }
+
+            // === 4. 执行取消点赞（使用已有的工具方法） ===
+            long totalLikes = processUnlike(userId, reviewId);
+
+            // === 5. 记录日志 ===
+            log.info("User {} unliked review {}. Total likes: {}", userId, reviewId, totalLikes);
+
+            return totalLikes;
+
+        } catch (SecurityException | IllegalArgumentException e) {
+            log.warn("unlikeReview failed: {}", e.getMessage());
+            throw e;
+        } catch (Exception e) {
+            log.error("Unexpected error in unlikeReview: {}", e.getMessage(), e);
+            throw new RuntimeException("Failed to unlike review: " + e.getMessage(), e);
+        }
     }
+
+    // 辅助方法：处理取消点赞的核心逻辑
+    private long processUnlike(long userId, long reviewId) {
+        // 检查用户是否已经点赞
+        if (hasUserLikedReview(userId, reviewId)) {
+            // 删除点赞记录
+            String deleteSql = "DELETE FROM review_likes WHERE AuthorId = ? AND ReviewId = ?";
+            jdbcTemplate.update(deleteSql, userId, reviewId);
+            log.debug("User {} removed like from review {}", userId, reviewId);
+        } else {
+            log.debug("User {} had not liked review {}, no action needed", userId, reviewId);
+        }
+
+        // 返回当前点赞总数
+        return getReviewLikeCount(reviewId);
+    }
+
+    // 工具方法：检查用户是否已经点赞（如果类中没有，需要添加）
+    private boolean hasUserLikedReview(long userId, long reviewId) {
+        String sql = "SELECT COUNT(*) FROM review_likes WHERE AuthorId = ? AND ReviewId = ?";
+
+        try {
+            Long count = jdbcTemplate.queryForObject(sql, Long.class, userId, reviewId);
+            return count != null && count > 0;
+        } catch (Exception e) {
+            log.error("Error checking if user {} liked review {}: {}", userId, reviewId, e.getMessage());
+            return false;
+        }
+    }
+
 
     @Override
     public PageResult<ReviewRecord> listByRecipe(long recipeId, int page, int size, String sort) {
-        throw new UnsupportedOperationException("Not implemented yet");
+        log.debug("Listing reviews for recipeId: {}, page: {}, size: {}, sort: {}",
+                recipeId, page, size, sort);
+
+        try {
+            // === 1. 参数验证 ===
+            if (recipeId <= 0) {
+                throw new IllegalArgumentException("Recipe ID must be positive");
+            }
+
+            if (page < 1) {
+                throw new IllegalArgumentException("Page must be >= 1");
+            }
+
+            if (size <= 0) {
+                throw new IllegalArgumentException("Size must be > 0");
+            }
+
+            // 确保size在合理范围内（1-200）
+            int validSize = Math.max(1, Math.min(size, 200));
+            int validPage = Math.max(1, page);
+            int offset = (validPage - 1) * validSize;
+
+            // === 2. 查询总记录数 ===
+            String countSql = "SELECT COUNT(*) FROM reviews WHERE RecipeId = ?";
+            Long total = jdbcTemplate.queryForObject(countSql, Long.class, recipeId);
+
+            if (total == null || total == 0) {
+                log.debug("No reviews found for recipe {}", recipeId);
+                return PageResult.<ReviewRecord>builder()
+                        .items(new ArrayList<>())
+                        .page(validPage)
+                        .size(validSize)
+                        .total(0L)
+                        .build();
+            }
+
+            // === 3. 构建排序和查询语句 ===
+            String orderByClause = buildOrderByClause(sort);
+            String querySql = buildQuerySql(orderByClause);
+
+            // === 4. 执行分页查询 ===
+            List<ReviewRecord> reviews = executePaginatedQuery(
+                    recipeId, querySql, validSize, offset
+            );
+
+            // === 5. 构建返回结果 ===
+            PageResult<ReviewRecord> result = PageResult.<ReviewRecord>builder()
+                    .items(reviews)
+                    .page(validPage)
+                    .size(validSize)
+                    .total(total)
+                    .build();
+
+            log.info("Found {} reviews for recipe {} (page {} of {})",
+                    total, recipeId, validPage, calculateTotalPages(total, validSize));
+
+            return result;
+
+        } catch (IllegalArgumentException e) {
+            log.warn("listByRecipe failed: {}", e.getMessage());
+            throw e;
+        } catch (Exception e) {
+            log.error("Unexpected error in listByRecipe: {}", e.getMessage(), e);
+            throw new RuntimeException("Failed to list reviews by recipe: " + e.getMessage(), e);
+        }
+    }
+
+    // 辅助方法：构建排序子句
+    private String buildOrderByClause(String sort) {
+        if (sort == null) {
+            return "ORDER BY r.DateModified DESC, r.ReviewId DESC";
+        }
+
+        switch (sort.toLowerCase()) {
+            case "likes_desc":
+                return "ORDER BY like_count DESC, r.DateModified DESC, r.ReviewId DESC";
+            case "date_desc":
+                return "ORDER BY r.DateModified DESC, r.ReviewId DESC";
+            default:
+                log.warn("Invalid sort parameter '{}', using default 'date_desc'", sort);
+                return "ORDER BY r.DateModified DESC, r.ReviewId DESC";
+        }
+    }
+
+    // 辅助方法：构建查询语句
+    private String buildQuerySql(String orderByClause) {
+        return "SELECT r.*, u.AuthorName, " +
+                "COALESCE(COUNT(rl.ReviewId), 0) as like_count " +
+                "FROM reviews r " +
+                "LEFT JOIN users u ON r.AuthorId = u.AuthorId " +
+                "LEFT JOIN review_likes rl ON r.ReviewId = rl.ReviewId " +
+                "WHERE r.RecipeId = ? " +
+                "GROUP BY r.ReviewId, u.AuthorName " +
+                orderByClause + " " +
+                "LIMIT ? OFFSET ?";
+    }
+
+    // 辅助方法：执行分页查询
+    private List<ReviewRecord> executePaginatedQuery(
+            long recipeId, String sql, int limit, int offset
+    ) {
+        return jdbcTemplate.query(
+                sql,
+                new Object[]{recipeId, limit, offset},
+                (rs, rowNum) -> {
+                    ReviewRecord review = new ReviewRecord();
+
+                    // 设置基本字段
+                    review.setReviewId(rs.getLong("ReviewId"));
+                    review.setRecipeId(rs.getLong("RecipeId"));
+                    review.setAuthorId(rs.getLong("AuthorId"));
+                    review.setAuthorName(rs.getString("AuthorName"));
+                    review.setRating(rs.getInt("Rating"));
+                    review.setReview(rs.getString("Review"));
+
+                    // 设置时间戳
+                    Timestamp dateSubmitted = rs.getTimestamp("DateSubmitted");
+                    Timestamp dateModified = rs.getTimestamp("DateModified");
+
+                    if (dateSubmitted != null) {
+                        review.setDateSubmitted(dateSubmitted);
+                    }
+
+                    if (dateModified != null) {
+                        review.setDateModified(dateModified);
+                    }
+
+                    // 获取点赞用户列表
+                    review.setLikes(getLikesForReview(review.getReviewId()));
+
+                    return review;
+                }
+        );
+    }
+
+    // 辅助方法：获取评论的点赞用户列表
+    private long[] getLikesForReview(long reviewId) {
+        String sql = "SELECT AuthorId FROM review_likes WHERE ReviewId = ? ORDER BY AuthorId";
+
+        try {
+            List<Long> likesList = jdbcTemplate.queryForList(sql, Long.class, reviewId);
+
+            if (likesList == null || likesList.isEmpty()) {
+                return new long[0];
+            }
+
+            // 转换为 long[]
+            long[] likesArray = new long[likesList.size()];
+            for (int i = 0; i < likesList.size(); i++) {
+                likesArray[i] = likesList.get(i);
+            }
+            return likesArray;
+        } catch (Exception e) {
+            log.debug("Error getting likes for review {}: {}", reviewId, e.getMessage());
+            return new long[0];
+        }
+    }
+
+    // 辅助方法：计算总页数
+    private int calculateTotalPages(long totalRecords, int pageSize) {
+        return (int) Math.ceil((double) totalRecords / pageSize);
     }
 
     @Override
