@@ -23,6 +23,7 @@ import java.util.*;
 public class UserServiceImpl implements UserService {
     @Autowired
     private JdbcTemplate jdbcTemplate;
+
     // 注册新用户：验证用户名、性别、年龄，加密密码后插入数据库
     // 返回新用户 ID，失败返回 -1（用户名重复、参数无效等）
     @Override
@@ -38,13 +39,6 @@ public class UserServiceImpl implements UserService {
 
         Integer age = calculateAge(req.getBirthday());
         if (age == null || age <= 0) {
-            return -1L;
-        }
-
-        // 检查用户名是否已存在
-        String checkSql = "SELECT COUNT(*) FROM users WHERE AuthorName = ?";
-        Integer count = jdbcTemplate.queryForObject(checkSql, Integer.class, req.getName());
-        if (count != null && count > 0) {
             return -1L;
         }
 
@@ -69,7 +63,6 @@ public class UserServiceImpl implements UserService {
             }
             return -1L;
         } catch (Exception e) {
-            log.error("Register failed: {}", e.getMessage());
             return -1L;
         }
     }
@@ -94,7 +87,6 @@ public class UserServiceImpl implements UserService {
         } catch (EmptyResultDataAccessException e) {
             return -1L;
         } catch (Exception e) {
-            log.error("Login failed: {}", e.getMessage());
             return -1L;
         }
     }
@@ -105,24 +97,28 @@ public class UserServiceImpl implements UserService {
     @Override
     public boolean deleteAccount(AuthInfo auth, long userId) {
         if (!isValidUser(auth)) {
-            throw new SecurityException("Invalid or inactive user");
+            throw new SecurityException("deleteAccount");
         }
 
         if (auth.getAuthorId() != userId) {
-            throw new SecurityException("User can only delete their own account");
+            throw new SecurityException("deleteAccount");
+        }
+
+        if (!verifyPassword(auth)) {
+            throw new SecurityException("deleteAccount");
         }
 
         String checkSql = "SELECT IsDeleted FROM users WHERE AuthorId = ?";
         try {
             Boolean isDeleted = jdbcTemplate.queryForObject(checkSql, Boolean.class, userId);
             if (isDeleted == null) {
-                throw new IllegalArgumentException("User does not exist");
+                throw new IllegalArgumentException("deleteAccount");
             }
             if (isDeleted) {
                 return false;
             }
         } catch (EmptyResultDataAccessException e) {
-            throw new IllegalArgumentException("User does not exist");
+            throw new IllegalArgumentException("deleteAccount");
         }
 
         jdbcTemplate.update("DELETE FROM user_follows WHERE FollowerId = ? OR FollowingId = ?", userId, userId);
@@ -139,11 +135,11 @@ public class UserServiceImpl implements UserService {
     @Override
     public boolean follow(AuthInfo auth, long followeeId) {
         if (!isValidUser(auth)) {
-            throw new SecurityException("Invalid or inactive user");
+            throw new SecurityException("follow");
         }
 
         if (auth.getAuthorId() == followeeId) {
-            throw new SecurityException("User cannot follow themselves");
+            throw new SecurityException("follow");
         }
 
         String checkFolloweeSql = "SELECT COUNT(*) FROM users WHERE AuthorId = ? AND IsDeleted = false";
@@ -193,15 +189,19 @@ public class UserServiceImpl implements UserService {
     @Override
     public void updateProfile(AuthInfo auth, String gender, Integer age) {
         if (!isValidUser(auth)) {
-            throw new SecurityException("Invalid or inactive user");
+            throw new SecurityException("updateProfile");
+        }
+
+        if (!verifyPassword(auth)) {
+            throw new SecurityException("updateProfile");
         }
 
         if (gender != null && !gender.equals("Male") && !gender.equals("Female")) {
-            throw new IllegalArgumentException("Invalid gender value");
+            throw new IllegalArgumentException("updateProfile");
         }
 
         if (age != null && age <= 0) {
-            throw new IllegalArgumentException("Age must be positive");
+            throw new IllegalArgumentException("updateProfile");
         }
 
         List<Object> params = new ArrayList<>();
@@ -237,7 +237,7 @@ public class UserServiceImpl implements UserService {
     @Override
     public PageResult<FeedItem> feed(AuthInfo auth, int page, int size, String category) {
         if (!isValidUser(auth)) {
-            throw new SecurityException("Invalid or inactive user");
+            throw new SecurityException("feed");
         }
 
         page = Math.max(1, page);
@@ -343,6 +343,23 @@ public class UserServiceImpl implements UserService {
             Boolean isDeleted = jdbcTemplate.queryForObject(sql, Boolean.class, auth.getAuthorId());
             return isDeleted != null && !isDeleted;
         } catch (EmptyResultDataAccessException e) {
+            return false;
+        }
+    }
+
+    // 验证密码是否正确
+    private boolean verifyPassword(AuthInfo auth) {
+        if (auth == null || auth.getPassword() == null || auth.getPassword().isEmpty()) {
+            return false;
+        }
+
+        String sql = "SELECT Password FROM users WHERE AuthorId = ? AND IsDeleted = false";
+        try {
+            String hash = jdbcTemplate.queryForObject(sql, String.class, auth.getAuthorId());
+            return hash != null && PasswordUtil.verifyPassword(auth.getPassword(), hash);
+        } catch (EmptyResultDataAccessException e) {
+            return false;
+        } catch (Exception e) {
             return false;
         }
     }
