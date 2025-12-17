@@ -5,6 +5,8 @@ import io.sustc.service.UserService;
 import io.sustc.util.PasswordUtil;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.cache.annotation.Cacheable;
+import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
@@ -70,6 +72,7 @@ public class UserServiceImpl implements UserService {
     // 用户登录：验证密码是否匹配
     // 成功返回用户 ID，失败返回 -1（用户不存在、已删除、密码错误等）
     @Override
+    @Cacheable(value = "userLogin", key = "#auth.authorId + '_' + #auth.password")
     public long login(AuthInfo auth) {
         if (auth == null || auth.getPassword() == null || auth.getPassword().isEmpty()) {
             return -1L;
@@ -165,6 +168,7 @@ public class UserServiceImpl implements UserService {
 
     // 根据 ID 查询用户信息
     @Override
+    @Cacheable(value = "users", key = "#userId")
     public UserRecord getById(long userId) {
         try {
             String sql = "SELECT * FROM public.users WHERE AuthorId = ?";

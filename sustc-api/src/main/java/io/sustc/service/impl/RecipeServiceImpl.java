@@ -6,6 +6,8 @@ import io.sustc.util.PasswordUtil;
 import io.sustc.util.PermissionUtils;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.cache.annotation.Cacheable;
+import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -27,6 +29,7 @@ public class RecipeServiceImpl implements RecipeService {
     private JdbcTemplate jdbcTemplate;
 
     @Override
+    @Cacheable(value = "recipeNames", key = "#id")
     public String getNameFromID(long id) {
         if (id <= 0) {
             return null;
@@ -44,6 +47,7 @@ public class RecipeServiceImpl implements RecipeService {
     }
 
     @Override
+    @Cacheable(value = "recipes", key = "#recipeId")
     public RecipeRecord getRecipeById(long recipeId) {
         // 1. 参数验证
         if (recipeId <= 0) {
@@ -123,7 +127,7 @@ public class RecipeServiceImpl implements RecipeService {
     // 辅助方法：安全获取可能为null的Float值（包装类型）
     private Float getNullableFloat(ResultSet rs, String columnName) throws SQLException {
         float value = rs.getFloat(columnName);
-        return rs.wasNull() ? null : value;
+        return rs.wasNull() ? 0 : value;
     }
 
     // 辅助方法：安全获取可能为null的float值，转换为原始float类型（不可为null）
@@ -258,6 +262,7 @@ public class RecipeServiceImpl implements RecipeService {
 
     @Override
     @Transactional
+    @CacheEvict(value = {"recipes", "recipeNames", "recipeSearch"}, allEntries = true)
     public long createRecipe(RecipeRecord dto, AuthInfo auth) {
         // 1. 验证权限
         if (!validateAuthAndPermission(auth)) {
@@ -379,6 +384,7 @@ public class RecipeServiceImpl implements RecipeService {
 
     @Override
     @Transactional
+    @CacheEvict(value = {"recipes", "recipeNames", "recipeSearch"}, allEntries = true)
     public void deleteRecipe(long recipeId, AuthInfo auth) {
         // 1. 验证权限
         if (!validateAuthAndPermission(auth)) {
@@ -446,6 +452,7 @@ public class RecipeServiceImpl implements RecipeService {
 
     @Override
     @Transactional
+    @CacheEvict(value = {"recipes", "recipeNames"}, key = "#recipeId")
     public void updateTimes(AuthInfo auth, long recipeId, String cookTimeIso, String prepTimeIso) {
         // 1. 验证权限
         if (!validateAuthAndPermission(auth)) {

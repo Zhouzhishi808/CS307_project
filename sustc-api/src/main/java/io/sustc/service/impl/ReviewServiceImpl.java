@@ -10,6 +10,8 @@ import io.sustc.service.ReviewService;
 import io.sustc.service.UserService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.cache.annotation.Cacheable;
+import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.jdbc.core.BeanPropertyRowMapper;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -37,6 +39,7 @@ public class ReviewServiceImpl implements ReviewService {
 
     @Override
     @Transactional
+    @CacheEvict(value = "reviewLists", allEntries = true)
     //插入新的评论，为其自动分配ID
     public long addReview(AuthInfo auth, long recipeId, int rating, String review) {
         try {
@@ -607,6 +610,7 @@ public class ReviewServiceImpl implements ReviewService {
 
 
     @Override
+    @Cacheable(value = "reviewLists", key = "#recipeId + '_' + #page + '_' + #size + '_' + #sort")
     public PageResult<ReviewRecord> listByRecipe(long recipeId, int page, int size, String sort) {
         log.debug("Listing reviews for recipeId: {}, page: {}, size: {}, sort: {}",
                 recipeId, page, size, sort);

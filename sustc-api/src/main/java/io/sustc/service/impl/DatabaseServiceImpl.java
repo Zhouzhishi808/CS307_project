@@ -454,12 +454,12 @@ public class DatabaseServiceImpl implements DatabaseService {
 
     @Override
     public void drop() {
-        jdbcTemplate.execute("DROP TRIGGER IF EXISTS trg_update_follow_counts ON user_follows");
-        jdbcTemplate.execute("DROP TRIGGER IF EXISTS trg_refresh_recipe_rating ON reviews");
-        jdbcTemplate.execute("DROP FUNCTION IF EXISTS update_follow_counts() CASCADE");
-        jdbcTemplate.execute("DROP FUNCTION IF EXISTS refresh_recipe_rating() CASCADE");
-        jdbcTemplate.execute("DROP VIEW IF EXISTS v_user_full_info CASCADE");
-        jdbcTemplate.execute("DROP VIEW IF EXISTS v_recipe_full_info CASCADE");
+//        jdbcTemplate.execute("DROP TRIGGER IF EXISTS trg_update_follow_counts ON user_follows");
+//        jdbcTemplate.execute("DROP TRIGGER IF EXISTS trg_refresh_recipe_rating ON reviews");
+//        jdbcTemplate.execute("DROP FUNCTION IF EXISTS update_follow_counts() CASCADE");
+//        jdbcTemplate.execute("DROP FUNCTION IF EXISTS refresh_recipe_rating() CASCADE");
+//        jdbcTemplate.execute("DROP VIEW IF EXISTS v_user_full_info CASCADE");
+//        jdbcTemplate.execute("DROP VIEW IF EXISTS v_recipe_full_info CASCADE");
         String sql = "DO $$\n" +
                 "DECLARE\n" +
                 "    tables CURSOR FOR\n" +
