@@ -48,20 +48,20 @@ public class ReviewServiceImpl implements ReviewService {
 
             validateAddReviewParameters(auth, rating, review);
 
-            long userId = PermissionUtils.validateUser(auth);
+            long userId = permissionUtils.validateUser(auth);
             if (userId == -1L) {
                 throw new SecurityException("Invalid or inactive user");
             }
 
-            if (!PermissionUtils.recipeExists(recipeId)) {
+            if (!permissionUtils.recipeExists(recipeId)) {
                 throw new IllegalArgumentException("Recipe does not exist");
             }
 
-            if (PermissionUtils.hasUserReviewedRecipe(userId, recipeId)) {
+            if (permissionUtils.hasUserReviewedRecipe(userId, recipeId)) {
                 throw new IllegalArgumentException("User has already reviewed this recipe");
             }
 
-            long newReviewId = PermissionUtils.generateNewId("reviews", "ReviewId");
+            long newReviewId = permissionUtils.generateNewId("reviews", "ReviewId");
 
             Timestamp now = Timestamp.from(Instant.now());
             String insertSql = "INSERT INTO reviews (ReviewId, RecipeId, AuthorId, Rating, Review, DateSubmitted, DateModified) " +
@@ -92,7 +92,7 @@ public class ReviewServiceImpl implements ReviewService {
 
     private void validateAddReviewParameters(AuthInfo auth, int rating, String review) {
         // 验证auth参数
-        if (PermissionUtils.validateUser(auth) == -1) {
+        if (permissionUtils.validateUser(auth) == -1) {
             throw new IllegalArgumentException("Authentication info is required");
         }
 
@@ -371,7 +371,10 @@ public class ReviewServiceImpl implements ReviewService {
             validateLikeReviewParameters(auth, reviewId);
 
             // === 2. 用户认证 ===
-            long userId = authenticateUser(auth);
+            long userId = permissionUtils.validateUser(auth);
+            if (userId == -1L) {
+                throw new SecurityException("Invalid or inactive user");
+            }
 
             // === 3. 业务规则验证 ===
             validateLikeReviewBusinessRules(userId, reviewId);

@@ -12,6 +12,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.jdbc.support.KeyHolder;
 import org.springframework.stereotype.Service;
+import java.math.BigDecimal;
 import java.sql.*;
 import java.time.LocalDate;
 import java.time.Period;
@@ -240,12 +241,19 @@ public class UserServiceImpl implements UserService {
     // 获取用户关注的人发布的食谱列表（feed 流）
     @Override
     public PageResult<FeedItem> feed(AuthInfo auth, int page, int size, String category) {
-        if (!isValidUser(auth)) {
-            throw new SecurityException("feed");
-        }
+        try {
+            log.debug("Feed request for authorId: {}, page: {}, size: {}, category: {}", 
+                     auth != null ? auth.getAuthorId() : "null", page, size, category);
+            
+            if (!isValidUser(auth)) {
+                log.warn("Invalid user for feed: {}", auth != null ? auth.getAuthorId() : "null");
+                throw new SecurityException("feed");
+            }
 
-        page = Math.max(1, page);
-        size = Math.max(1, Math.min(200, size));
+            page = Math.max(1, page);
+            size = Math.max(1, Math.min(200, size));
+            
+            log.debug("Normalized page: {}, size: {}", page, size);
 
         StringBuilder countSql = new StringBuilder(
             "SELECT COUNT(*) FROM recipes r " +
@@ -272,8 +280,12 @@ public class UserServiceImpl implements UserService {
 
         dataSql.append(" ORDER BY r.DatePublished DESC, r.RecipeId DESC LIMIT ? OFFSET ?");
 
+        log.debug("Executing count SQL: {}, params: {}", countSql.toString(), params);
         Long total = jdbcTemplate.queryForObject(countSql.toString(), Long.class, params.toArray());
+        log.debug("Count query result: {}", total);
+        
         if (total == null || total == 0) {
+            log.info("No feed items found for user: {}", auth.getAuthorId());
             return PageResult.<FeedItem>builder()
                 .items(new ArrayList<>())
                 .page(page)
@@ -286,6 +298,7 @@ public class UserServiceImpl implements UserService {
         dataParams.add(size);
         dataParams.add((page - 1) * size);
 
+        log.debug("Executing data SQL: {}, params: {}", dataSql.toString(), dataParams);
         List<FeedItem> items = jdbcTemplate.query(dataSql.toString(), dataParams.toArray(), (rs, rowNum) -> {
             FeedItem item = new FeedItem();
             item.setRecipeId(rs.getLong("RecipeId"));
@@ -294,17 +307,24 @@ public class UserServiceImpl implements UserService {
             item.setAuthorName(rs.getString("AuthorName"));
             Timestamp ts = rs.getTimestamp("DatePublished");
             item.setDatePublished(ts != null ? ts.toInstant() : null);
-            item.setAggregatedRating(rs.getObject("AggregatedRating", Double.class));
+            BigDecimal rating = rs.getBigDecimal("AggregatedRating");
+            item.setAggregatedRating(rating != null ? rating.doubleValue() : null);
             item.setReviewCount(rs.getObject("ReviewCount", Integer.class));
             return item;
         });
 
+        log.debug("Query returned {} items", items.size());
         return PageResult.<FeedItem>builder()
             .items(items)
             .page(page)
             .size(size)
             .total(total)
             .build();
+        } catch (Exception e) {
+            log.error("Error in feed method for user {}: {}", 
+                     auth != null ? auth.getAuthorId() : "null", e.getMessage(), e);
+            throw e;
+        }
     }
 
     // 查找粉丝/关注比最高的用户

@@ -15,10 +15,10 @@ import java.time.format.DateTimeParseException;
 @Slf4j
 public class PermissionUtils {
     @Autowired
-    private static JdbcTemplate jdbcTemplate;
+    private JdbcTemplate jdbcTemplate;
 
     //检验用户是否存在
-    public static long validateUser(AuthInfo auth) {
+    public long validateUser(AuthInfo auth) {
         if (auth == null || auth.getAuthorId() <= 0) {
             log.warn("Invalid auth info: {}", auth);
             return -1L;
@@ -47,7 +47,7 @@ public class PermissionUtils {
         }
     }
 
-    public static boolean recipeExists(long recipeId) {
+    public boolean recipeExists(long recipeId) {
         String sql = "SELECT COUNT(*) FROM recipes WHERE RecipeId = ?";
         try {
             Integer count = jdbcTemplate.queryForObject(sql, Integer.class, recipeId);
@@ -87,7 +87,7 @@ public class PermissionUtils {
         }
     }
 
-    public static boolean hasUserReviewedRecipe(long userId, long recipeId) {
+    public boolean hasUserReviewedRecipe(long userId, long recipeId) {
         String sql = "SELECT COUNT(*) FROM reviews WHERE AuthorId = ? AND RecipeId = ?";
         try {
             Integer count = jdbcTemplate.queryForObject(sql, Integer.class, userId, recipeId);
@@ -127,7 +127,7 @@ public class PermissionUtils {
         }
     }
 
-    public static long generateNewId(String tableName, String idColumn) {
+    public long generateNewId(String tableName, String idColumn) {
         String sql = String.format("SELECT COALESCE(MAX(%s), 0) FROM %s", idColumn, tableName);
         try {
             Long maxId = jdbcTemplate.queryForObject(sql, Long.class);
