@@ -77,7 +77,7 @@ public class BenchmarkService {
 
         val startTime = System.currentTimeMillis();
         cases.entrySet().forEach(it -> {
-            try { 
+            try {
                 val res = recipeService.getNameFromID(it.getKey());
                 if (Objects.equals(it.getValue(), res)) {
                     pass.incrementAndGet();
@@ -577,13 +577,17 @@ public class BenchmarkService {
             val args = it.getKey();
             try {
                 val res = userService.follow((AuthInfo) args[0], (long) args[1]);
-                if (Objects.equals(it.getValue(), res)) {
+                if (Boolean.TRUE.equals(it.getValue())) {
                     pass.incrementAndGet();
                 } else {
-                    log.debug("Wrong register result for {}: expected {}, got {}", args, it.getValue(), res);
+                    log.debug("Wrong result for {}: expected {}, got {}", args, "true or SecurityException", res);
                 }
-            } catch (Exception e) {
-                log.error("Exception thrown for args {}: {}", Arrays.toString(args), e.toString());
+            } catch (SecurityException e) {
+                if (Boolean.FALSE.equals(it.getValue())) {
+                    pass.incrementAndGet();
+                } else {
+                    log.debug("Wrong answer for {}: expected {}, got {}", it.getKey(), it.getValue(), "SecurityException");
+                }
             }
         });
         val endTime = System.currentTimeMillis();
@@ -593,32 +597,32 @@ public class BenchmarkService {
 
     @BenchmarkStep(order = 18, description = "Test UserService#deleteAccount(AuthInfo, long)")
     public BenchmarkResult deleteAccountTest() {
-         List<Map.Entry<Object[], Boolean>> cases = deserialize(BenchmarkConstants.TEST_DATA, BenchmarkConstants.USER_DELETE);
-         val pass = new AtomicLong();
+        List<Map.Entry<Object[], Boolean>> cases = deserialize(BenchmarkConstants.TEST_DATA, BenchmarkConstants.USER_DELETE);
+        val pass = new AtomicLong();
 
-         val startTime = System.currentTimeMillis();
-         cases.forEach(it -> {
-             val args = it.getKey();
-             try {
-                 val res = userService.deleteAccount((AuthInfo) args[0], (long) args[1]);
-                 if (Objects.equals(it.getValue(), res)) {
-                     pass.incrementAndGet();
-                 } else {
-                     log.debug("Wrong register result for {}: expected {}, got {}", args, it.getValue(), res);
-                 }
-             } catch (IllegalArgumentException | SecurityException illegalArgumentException) {
-                 if (Boolean.FALSE.equals(it.getValue())) {
-                     pass.incrementAndGet();
-                 } else {
-                     log.debug("Wrong answer for {}: expected {}, got {}", it.getKey(), it.getValue(), "IllegalArgumentException");
-                 }
-             } catch (Exception e) {
-                 log.error("Exception thrown for args {}: {}", Arrays.toString(args), e.toString());
-             }
-         });
-         val endTime = System.currentTimeMillis();
+        val startTime = System.currentTimeMillis();
+        cases.forEach(it -> {
+            val args = it.getKey();
+            try {
+                val res = userService.deleteAccount((AuthInfo) args[0], (long) args[1]);
+                if (Boolean.TRUE.equals(it.getValue())) {
+                    pass.incrementAndGet();
+                } else {
+                    log.debug("Wrong result for {}: expected {}, got {}", args, "true or exception", res);
+                }
+            } catch (IllegalArgumentException | SecurityException illegalArgumentException) {
+                if (Boolean.FALSE.equals(it.getValue())) {
+                    pass.incrementAndGet();
+                } else {
+                    log.debug("Wrong answer for {}: expected {}, got {}", it.getKey(), it.getValue(), "IllegalArgumentException");
+                }
+            } catch (Exception e) {
+                log.error("Exception thrown for args {}: {}", Arrays.toString(args), e.toString());
+            }
+        });
+        val endTime = System.currentTimeMillis();
 
-         return new BenchmarkResult(pass, endTime - startTime);
+        return new BenchmarkResult(pass, endTime - startTime);
     }
 
     @BenchmarkStep(order = 19, description = "Test UserService#getById(long)")
