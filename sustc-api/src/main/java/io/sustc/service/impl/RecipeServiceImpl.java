@@ -55,8 +55,10 @@ public class RecipeServiceImpl implements RecipeService {
         }
 
         try {
-            // 2. 查询食谱基本信息
-            String sql = "SELECT * FROM recipes WHERE RecipeId = ?";
+            // 2. 查询食谱基本信息，添加 JOIN users 表来获取 AuthorName
+            String sql = "SELECT r.*, u.AuthorName FROM recipes r " +
+                    "LEFT JOIN users u ON r.AuthorId = u.AuthorId " +
+                    "WHERE r.RecipeId = ?";
             RecipeRecord recipe = jdbcTemplate.queryForObject(sql, (rs, rowNum) -> {
                 return mapResultSetToRecipeRecord(rs, true);  // 获取食材
             }, recipeId);
@@ -84,6 +86,15 @@ public class RecipeServiceImpl implements RecipeService {
         recipe.setRecipeId(rs.getLong("RecipeId"));
         recipe.setName(rs.getString("Name"));
         recipe.setAuthorId(rs.getLong("AuthorId"));
+
+        // 尝试获取 AuthorName（如果查询中包含了 JOIN users）
+        try {
+            recipe.setAuthorName(rs.getString("AuthorName"));
+        } catch (SQLException e) {
+            // 如果查询中没有 AuthorName 字段，设置为 null
+            recipe.setAuthorName(null);
+        }
+
         recipe.setCookTime(rs.getString("CookTime"));
         recipe.setPrepTime(rs.getString("PrepTime"));
         recipe.setTotalTime(rs.getString("TotalTime"));
@@ -177,7 +188,7 @@ public class RecipeServiceImpl implements RecipeService {
 
         // 关键字搜索（在名称和描述中模糊匹配）
         if (keyword != null && !keyword.trim().isEmpty()) {
-            whereClause.append(" AND (LOWER(Name) LIKE LOWER(?) OR LOWER(Description) LIKE LOWER(?))");
+            whereClause.append(" AND (LOWER(r.Name) LIKE LOWER(?) OR LOWER(r.Description) LIKE LOWER(?))");
             String likeKeyword = "%" + keyword.trim() + "%";
             params.add(likeKeyword);
             params.add(likeKeyword);
@@ -185,21 +196,21 @@ public class RecipeServiceImpl implements RecipeService {
 
         // 分类过滤
         if (category != null && !category.trim().isEmpty()) {
-            whereClause.append(" AND RecipeCategory = ?");
+            whereClause.append(" AND r.RecipeCategory = ?");
             params.add(category.trim());
         }
 
         // 最低评分过滤
         if (minRating != null && minRating > 0) {
-            whereClause.append(" AND AggregatedRating >= ?");
+            whereClause.append(" AND r.AggregatedRating >= ?");
             params.add(minRating);
         }
 
         // 构建排序子句
         String orderByClause = buildOrderByClause(sort);
 
-        // 查询总记录数
-        String countSql = "SELECT COUNT(*) FROM recipes" + whereClause.toString();
+        // 查询总记录数（使用表别名 r 以匹配 WHERE 子句）
+        String countSql = "SELECT COUNT(*) FROM recipes r" + whereClause.toString();
         Long total = jdbcTemplate.queryForObject(countSql, Long.class, params.toArray());
         if (total == null) total = 0L;
 
@@ -213,8 +224,11 @@ public class RecipeServiceImpl implements RecipeService {
                     .build();
         }
 
-        // 构建分页查询
-        String querySql = "SELECT * FROM recipes" + whereClause.toString() + " " + orderByClause + " LIMIT ? OFFSET ?";
+        // 构建分页查询，添加 JOIN users 表来获取 AuthorName
+        String querySql = "SELECT r.*, u.AuthorName FROM recipes r " +
+                "LEFT JOIN users u ON r.AuthorId = u.AuthorId " +
+                whereClause.toString() +
+                " " + orderByClause + " LIMIT ? OFFSET ?";
 
         // 添加分页参数
         List<Object> queryParams = new ArrayList<>(params);
@@ -222,16 +236,9 @@ public class RecipeServiceImpl implements RecipeService {
         queryParams.add((validPage - 1) * validSize);
 
         // 执行查询
-        List<RecipeRecord> recipes = jdbcTemplate.query(querySql, queryParams.toArray(), (rs, rowNum) -> {
-            RecipeRecord recipe = mapResultSetToRecipeRecord(rs);
-
-            // 获取并设置食材列表
-            long recipeId = rs.getLong("RecipeId");
-            String[] ingredients = getRecipeIngredientsArray(recipeId);
-            recipe.setRecipeIngredientParts(ingredients);
-
-            return recipe;
-        });
+        List<RecipeRecord> recipes = jdbcTemplate.query(querySql, queryParams.toArray(), (rs, rowNum) ->
+            mapResultSetToRecipeRecord(rs, true)  // mapResultSetToRecipeRecord 已经会获取食材
+        );
 
         return PageResult.<RecipeRecord>builder()
                 .items(recipes)
@@ -244,19 +251,19 @@ public class RecipeServiceImpl implements RecipeService {
     // 辅助方法：构建排序子句
     private String buildOrderByClause(String sort) {
         if (sort == null) {
-            return "ORDER BY DatePublished DESC, RecipeId DESC";
+            return "ORDER BY r.DatePublished DESC, r.RecipeId DESC";
         }
 
         switch (sort.toLowerCase()) {
             case "rating_desc":
-                return "ORDER BY AggregatedRating DESC NULLS LAST, RecipeId DESC";
+                return "ORDER BY r.AggregatedRating DESC NULLS LAST, r.RecipeId DESC";
             case "date_desc":
-                return "ORDER BY DatePublished DESC, RecipeId DESC";
+                return "ORDER BY r.DatePublished DESC, r.RecipeId DESC";
             case "calories_asc":
-                return "ORDER BY Calories ASC NULLS LAST, RecipeId ASC";
+                return "ORDER BY r.Calories ASC NULLS LAST, r.RecipeId ASC";
             default:
                 log.warn("Invalid sort parameter '{}', using default 'date_desc'", sort);
-                return "ORDER BY DatePublished DESC, RecipeId DESC";
+                return "ORDER BY r.DatePublished DESC, r.RecipeId DESC";
         }
     }
 
