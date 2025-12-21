@@ -19,6 +19,7 @@ import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.*;
@@ -73,6 +74,8 @@ public class ReviewServiceImpl implements ReviewService {
             if (rowsInserted != 1) {
                 throw new RuntimeException("Failed to insert review - unexpected row count: " + rowsInserted);
             }
+
+            refreshRecipeAggregatedRating(recipeId);
 
             log.info("Successfully added review {} for recipe {} by user {}",
                     newReviewId, recipeId, userId);
@@ -151,6 +154,8 @@ public class ReviewServiceImpl implements ReviewService {
             if (affectedRows != 1) {
                 throw new RuntimeException("Failed to update review - unexpected row count: " + affectedRows);
             }
+
+            refreshRecipeAggregatedRating(recipeId);
 
             // === 5. 记录日志 ===
             log.info("User {} edited review {} for recipe {}", userId, reviewId, recipeId);
@@ -232,6 +237,15 @@ public class ReviewServiceImpl implements ReviewService {
             log.error("[{}] Failed unexpectedly: {}", METHOD_NAME, e.getMessage(), e);
             throw new RuntimeException("Failed to delete review: " + e.getMessage(), e);
         }
+    }
+
+    private long authenticateUser(AuthInfo auth) {
+        // 使用 PermissionUtils.validateUser 来验证用户是否存在且活跃
+        long userId = permissionUtils.validateUser(auth);
+        if (userId == -1L) {
+            throw new SecurityException("Invalid user credentials or inactive account");
+        }
+        return userId;
     }
 
     // 辅助方法：验证删除评论的参数
@@ -339,9 +353,20 @@ public class ReviewServiceImpl implements ReviewService {
     // 辅助方法：刷新食谱评分
     private void refreshRecipeRating(long recipeId) {
         try {
-            // 调用自己的refreshRecipeAggregatedRating方法
-            refreshRecipeAggregatedRating(recipeId);
-            log.debug("Refreshed recipe rating for recipe {}", recipeId);
+            // 直接使用 SQL 更新，确保评分正确
+            String updateSql =
+                    "UPDATE recipes SET " +
+                            "AggregatedRating = (SELECT ROUND(AVG(Rating)::numeric, 2) FROM reviews WHERE RecipeId = ?), " +
+                            "ReviewCount = (SELECT COUNT(*) FROM reviews WHERE RecipeId = ?) " +
+                            "WHERE RecipeId = ?";
+
+            int updated = jdbcTemplate.update(updateSql, recipeId, recipeId, recipeId);
+
+            if (updated == 1) {
+                log.debug("Successfully refreshed recipe rating for recipe {}", recipeId);
+            } else {
+                log.warn("Recipe {} not found or already deleted", recipeId);
+            }
         } catch (Exception e) {
             log.error("Failed to refresh recipe rating for recipe {}: {}", recipeId, e.getMessage(), e);
             // 这里不抛出异常，因为删除操作已经成功
@@ -416,14 +441,6 @@ public class ReviewServiceImpl implements ReviewService {
         }
     }
 
-    // 辅助方法：用户认证
-    private long authenticateUser(AuthInfo auth) {
-        long userId = userService.login(auth);
-        if (userId == -1L) {
-            throw new SecurityException("Invalid user credentials or inactive account");
-        }
-        return userId;
-    }
 
     // 辅助方法：验证点赞评论的业务规则
     private void validateLikeReviewBusinessRules(long userId, long reviewId) {
@@ -834,19 +851,24 @@ public class ReviewServiceImpl implements ReviewService {
 
     // 辅助方法：计算食谱的评分统计
     private RatingStats calculateRecipeRatingStats(long recipeId) {
+        // 在 SQL 中直接转换为 DOUBLE PRECISION 和 INTEGER
         String sql =
                 "SELECT " +
-                        "  ROUND(AVG(Rating)::numeric, 2) as avg_rating, " +
-                        "  COUNT(*) as review_count " +
+                        "  CASE WHEN COUNT(*) = 0 THEN NULL " +
+                        "       ELSE ROUND(AVG(Rating)::numeric, 2)::DOUBLE PRECISION " +
+                        "  END as avg_rating, " +
+                        "  COUNT(*)::INTEGER as review_count " +
                         "FROM reviews " +
                         "WHERE RecipeId = ?";
 
         try {
             Map<String, Object> stats = jdbcTemplate.queryForMap(sql, recipeId);
-            Double avgRating = (Double) stats.get("avg_rating");
-            Long reviewCount = (Long) stats.get("review_count");
 
-            return new RatingStats(avgRating, reviewCount != null ? reviewCount.intValue() : 0);
+            // 现在应该是正确的类型
+            Double avgRating = (Double) stats.get("avg_rating");
+            Integer reviewCount = (Integer) stats.get("review_count");
+
+            return new RatingStats(avgRating, reviewCount != null ? reviewCount : 0);
 
         } catch (EmptyResultDataAccessException e) {
             // 没有评论，评分和评论数都为0
@@ -891,9 +913,13 @@ public class ReviewServiceImpl implements ReviewService {
                 recipe.setDescription(rs.getString("Description"));
                 recipe.setRecipeCategory(rs.getString("RecipeCategory"));
 
-                // 处理可能为null的评分
+                // 处理可能为null的评分 - 修复这里！
                 float aggregatedRating = rs.getFloat("AggregatedRating");
-                recipe.setAggregatedRating(rs.wasNull() ? null : aggregatedRating);
+                if (rs.wasNull()) {
+                    recipe.setAggregatedRating(0.0f);  // 如果为null，设置为0.0f
+                } else {
+                    recipe.setAggregatedRating(aggregatedRating);
+                }
 
                 recipe.setReviewCount(rs.getInt("ReviewCount"));
                 recipe.setCalories(rs.getFloat("Calories"));
