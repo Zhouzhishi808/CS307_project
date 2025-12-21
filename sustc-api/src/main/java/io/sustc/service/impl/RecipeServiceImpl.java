@@ -176,11 +176,14 @@ public class RecipeServiceImpl implements RecipeService {
     }
 
     @Override
-    public PageResult<RecipeRecord> searchRecipes(String keyword, String category, Double minRating,
-                                                  Integer page, Integer size, String sort) {
-        // 参数验证和默认值设置
-        int validPage = Math.max(1, page != null ? page : 1);
-        int validSize = Math.max(1, Math.min(size != null ? size : 20, 200));
+    public PageResult<RecipeRecord> searchRecipes(String keyword, String category, Double minRating, Integer page, Integer size, String sort) {
+        // 非法分页直接返回 null
+        if (page == null || page < 1 || size == null || size <= 0) {
+            return null;
+        }
+
+        int validPage = Math.max(1, page);
+        int validSize = Math.max(1, Math.min(size, 200));
 
         // 构建查询条件和参数
         List<Object> params = new ArrayList<>();
@@ -201,8 +204,8 @@ public class RecipeServiceImpl implements RecipeService {
         }
 
         // 最低评分过滤
-        if (minRating != null && minRating > 0) {
-            whereClause.append(" AND r.AggregatedRating >= ?");
+        if (minRating != null) {
+            whereClause.append(" AND r.AggregatedRating IS NOT NULL AND r.AggregatedRating >= ?");
             params.add(minRating);
         }
 
@@ -561,40 +564,21 @@ public class RecipeServiceImpl implements RecipeService {
     @Override
     public Map<String, Object> getClosestCaloriePair() {
         String sql = """
-            WITH ranked_recipes AS (
-                SELECT 
-                    RecipeId,
-                    Calories,
-                    LAG(RecipeId) OVER (ORDER BY Calories) AS prev_recipe_id,
-                    LAG(Calories) OVER (ORDER BY Calories) AS prev_calories,
-                    Calories - LAG(Calories) OVER (ORDER BY Calories) AS diff
-                FROM recipes
-                WHERE Calories IS NOT NULL
-                ORDER BY Calories
-            ),
-            min_diff AS (
-                SELECT 
-                    RecipeId,
-                    Calories,
-                    prev_recipe_id,
-                    prev_calories,
-                    diff,
-                    ROW_NUMBER() OVER (ORDER BY diff, prev_recipe_id, RecipeId) as rn
-                FROM ranked_recipes
-                WHERE diff IS NOT NULL
-            )
-            SELECT 
-                prev_recipe_id AS RecipeA,
-                RecipeId AS RecipeB,
-                prev_calories AS CaloriesA,
-                Calories AS CaloriesB,
-                diff AS Difference
-            FROM min_diff
-            WHERE rn = 1
+            SELECT r1.RecipeId AS RecipeA, r2.RecipeId AS RecipeB,
+                   r1.Calories AS CaloriesA, r2.Calories AS CaloriesB,
+                   ABS(r1.Calories - r2.Calories) AS Difference
+            FROM recipes r1
+            JOIN recipes r2 ON r1.RecipeId < r2.RecipeId
+            WHERE r1.Calories IS NOT NULL AND r2.Calories IS NOT NULL
+            ORDER BY Difference ASC, r1.RecipeId ASC, r2.RecipeId ASC
+            LIMIT 1
             """;
 
         try {
-            return jdbcTemplate.queryForObject(sql, (rs, rowNum) -> {
+            return jdbcTemplate.query(sql, rs -> {
+                if (!rs.next()) {
+                    return null;
+                }
                 Map<String, Object> result = new HashMap<>();
                 result.put("RecipeA", rs.getLong("RecipeA"));
                 result.put("RecipeB", rs.getLong("RecipeB"));
@@ -603,7 +587,8 @@ public class RecipeServiceImpl implements RecipeService {
                 result.put("Difference", rs.getDouble("Difference"));
                 return result;
             });
-        } catch (EmptyResultDataAccessException e) {
+        } catch (Exception e) {
+            log.error("Error computing closest calorie pair: {}", e.getMessage(), e);
             return null;
         }
     }
@@ -611,28 +596,21 @@ public class RecipeServiceImpl implements RecipeService {
     @Override
     public List<Map<String, Object>> getTop3MostComplexRecipesByIngredients() {
         String sql = """
-            SELECT 
-                r.RecipeId,
-                r.Name,
-                COUNT(ri.IngredientPart) AS IngredientCount
-            FROM recipes r
-            INNER JOIN recipe_ingredients ri ON r.RecipeId = ri.RecipeId
+            SELECT r.RecipeId, r.Name, COUNT(ri.IngredientPart) AS IngredientCount
+            FROM recipe_ingredients ri
+            JOIN recipes r ON r.RecipeId = ri.RecipeId
             GROUP BY r.RecipeId, r.Name
             ORDER BY IngredientCount DESC, r.RecipeId ASC
             LIMIT 3
             """;
 
-        try {
-            return jdbcTemplate.query(sql, (rs, rowNum) -> {
-                Map<String, Object> result = new HashMap<>();
-                result.put("RecipeId", rs.getLong("RecipeId"));
-                result.put("Name", rs.getString("Name"));
-                result.put("IngredientCount", rs.getInt("IngredientCount"));
-                return result;
-            });
-        } catch (EmptyResultDataAccessException e) {
-            return new ArrayList<>();
-        }
+        return jdbcTemplate.query(sql, (rs, i) -> {
+            Map<String, Object> row = new HashMap<>();
+            row.put("RecipeId", rs.getLong("RecipeId"));
+            row.put("Name", rs.getString("Name"));
+            row.put("IngredientCount", rs.getInt("IngredientCount"));
+            return row;
+        });
     }
 
 }

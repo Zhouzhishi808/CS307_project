@@ -126,7 +126,7 @@ public class ReviewServiceImpl implements ReviewService {
             validateEditReviewParameters(auth, rating, review);
 
             // === 2. 用户认证 ===
-            long userId = userService.login(auth);
+            long userId = permissionUtils.validateUser(auth);
             if (userId == -1L) {
                 throw new SecurityException("Invalid user credentials or inactive account");
             }
@@ -396,10 +396,7 @@ public class ReviewServiceImpl implements ReviewService {
             validateLikeReviewParameters(auth, reviewId);
 
             // === 2. 用户认证 ===
-            long userId = permissionUtils.validateUser(auth);
-            if (userId == -1L) {
-                throw new SecurityException("Invalid or inactive user");
-            }
+            long userId = authenticateActiveUser(auth);
 
             // === 3. 业务规则验证 ===
             validateLikeReviewBusinessRules(userId, reviewId);
@@ -572,10 +569,7 @@ public class ReviewServiceImpl implements ReviewService {
             }
 
             // === 2. 用户认证 ===
-            long userId = userService.login(auth);
-            if (userId == -1L) {
-                throw new SecurityException("Invalid user credentials or inactive account");
-            }
+            long userId = authenticateActiveUser(auth);
 
             // === 3. 验证评论存在性 ===
             if (!permissionUtils.reviewExists(reviewId)) {
@@ -955,6 +949,27 @@ public class ReviewServiceImpl implements ReviewService {
         } catch (Exception e) {
             log.warn("Failed to get ingredients for recipe {}: {}", recipeId, e.getMessage());
             return new ArrayList<>();
+        }
+    }
+
+    private long authenticateActiveUser(AuthInfo auth) {
+        // 支持明文或加盐存储的密码校验，保证密码错误触发 SecurityException
+        if (auth == null || auth.getPassword() == null || auth.getPassword().trim().isEmpty()) {
+            throw new IllegalArgumentException("Authentication info is required");
+        }
+        String sql = "SELECT Password FROM users WHERE AuthorId = ? AND IsDeleted = false";
+        try {
+            String stored = jdbcTemplate.queryForObject(sql, String.class, auth.getAuthorId());
+            if (stored == null) {
+                throw new SecurityException("Invalid user credentials or inactive account");
+            }
+            boolean ok = stored.equals(auth.getPassword()) || io.sustc.util.PasswordUtil.verifyPassword(auth.getPassword(), stored);
+            if (ok) {
+                return auth.getAuthorId();
+            }
+            throw new SecurityException("Invalid user credentials or inactive account");
+        } catch (EmptyResultDataAccessException e) {
+            throw new SecurityException("Invalid user credentials or inactive account");
         }
     }
 
