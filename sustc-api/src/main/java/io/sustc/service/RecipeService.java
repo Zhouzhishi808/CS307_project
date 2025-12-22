@@ -23,6 +23,9 @@ public interface RecipeService {
     /**
      * Retrieves a recipe by its ID.
      *
+     * <p>This method returns the <b>complete {@link RecipeRecord}</b> corresponding
+     * to the given ID, including <b>all fields defined in {@code RecipeRecord}</b>.
+     *
      * <p>This method returns {@code null} if no active (non-deleted) recipe
      * with the given ID exists.</p>
      *
@@ -56,6 +59,9 @@ public interface RecipeService {
      *   <li>{@code "date_desc"} — newest first</li>
      *   <li>{@code "calories_asc"} — lowest calories first</li>
      * </ul>
+     *
+     * <p>This method returns the <b>complete {@link RecipeRecord}</b> corresponding
+     * to the given ID, including <b>all fields defined in {@code RecipeRecord}</b>.
      *
      * @param keyword   fuzzy search term for name/description (nullable)
      * @param category  category filter (nullable)
@@ -97,17 +103,24 @@ public interface RecipeService {
 
     /**
      *
-     * Only the recipe author may delete the recipe.
-     * After deletion:
+     * Permanently deletes a recipe by its ID.
+     *
+     * <p>Only the recipe author may delete the recipe.</p>
+     *
+     * <p><b>Requirements:</b></p>
      * <ul>
-     *   <li>the recipe is marked as deleted</li>
-     *   <li>its reviews, favorites, and statistics must be ignored in all queries</li>
+     *   <li>The recipe record is physically removed from the database.</li>
+     *   <li>All data that directly depends on the recipe
+     *       (including reviews)
+     *       must be deleted or cascaded accordingly.</li>
+     *   <li>After deletion, the recipe ID must no longer be queryable.</li>
      * </ul>
      *
      * @param recipeId the ID of the recipe
      * @param auth     authentication identity of the operator
      *
-     * @throws SecurityException if {@code auth} is invalid, inactive, or if the operator is not the recipe author
+     * @throws SecurityException if {@code auth} is invalid, inactive,
+     *         or if the operator is not the recipe author
      */
     void deleteRecipe(long recipeId, AuthInfo auth);
 

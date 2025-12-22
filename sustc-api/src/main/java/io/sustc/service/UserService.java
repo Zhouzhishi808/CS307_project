@@ -122,8 +122,8 @@ public interface UserService {
      *
      * @param auth        authentication info of the follower
      * @param followeeId  the user to be followed or unfollowed
-     * @return {@code true} if the follow state becomes "following" after this operation,
-     *         {@code false} if the operation fails or the state becomes "not following"
+     * @return {@code true} if the follow state becomes "following" or "not following" after this operation,
+     *         {@code false} if the operation fails
      *
      * @apiNote Consider the following corner cases:
      * <ul>
@@ -135,7 +135,6 @@ public interface UserService {
      * @throws SecurityException
      *         if {@code auth} is invalid, inactive, or if the user attempts to follow himself/herself
      *
-     * If any corner case occurs, this method must return {@code false}.
      */
     boolean follow(AuthInfo auth, long followeeId);
 

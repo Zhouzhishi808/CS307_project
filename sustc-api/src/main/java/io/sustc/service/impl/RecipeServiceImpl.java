@@ -118,9 +118,17 @@ public class RecipeServiceImpl implements RecipeService {
         recipe.setSugarContent(getSafeFloat(rs, "SugarContent"));
         recipe.setProteinContent(getSafeFloat(rs, "ProteinContent"));
 
-        // 处理servings（可能为null）
-        Integer servings = getNullableInt(rs, "RecipeServings");
-        recipe.setRecipeServings(servings != null ? servings : 0);
+        // 处理servings（存储为VARCHAR，需要转换为int）
+        String servingsStr = rs.getString("RecipeServings");
+        int servings = 0;
+        if (servingsStr != null && !servingsStr.trim().isEmpty()) {
+            try {
+                servings = Integer.parseInt(servingsStr.trim());
+            } catch (NumberFormatException e) {
+                servings = 0;
+            }
+        }
+        recipe.setRecipeServings(servings);
 
         recipe.setRecipeYield(rs.getString("RecipeYield"));
 
@@ -138,7 +146,7 @@ public class RecipeServiceImpl implements RecipeService {
     // 辅助方法：安全获取可能为null的Float值（包装类型）
     private Float getNullableFloat(ResultSet rs, String columnName) throws SQLException {
         float value = rs.getFloat(columnName);
-        return rs.wasNull() ? 0 : value;
+        return rs.wasNull() ? null : value;
     }
 
     // 辅助方法：安全获取可能为null的float值，转换为原始float类型（不可为null）
@@ -159,9 +167,9 @@ public class RecipeServiceImpl implements RecipeService {
         return rs.wasNull() ? null : value;
     }
 
-    // 辅助方法：获取食谱的食材数组
+    // 辅助方法：获取食谱的食材数组（按忽略大小写的字典序排序）
     private String[] getRecipeIngredientsArray(long recipeId) {
-        String sql = "SELECT IngredientPart FROM recipe_ingredients WHERE RecipeId = ? ORDER BY IngredientPart";
+        String sql = "SELECT IngredientPart FROM recipe_ingredients WHERE RecipeId = ? ORDER BY LOWER(IngredientPart)";
 
         try {
             List<String> ingredientsList = jdbcTemplate.queryForList(sql, String.class, recipeId);
@@ -177,13 +185,16 @@ public class RecipeServiceImpl implements RecipeService {
 
     @Override
     public PageResult<RecipeRecord> searchRecipes(String keyword, String category, Double minRating, Integer page, Integer size, String sort) {
-        // 非法分页直接返回 null
-        if (page == null || page < 1 || size == null || size <= 0) {
-            return null;
+        // 验证分页参数
+        if (page == null || page < 1) {
+            throw new IllegalArgumentException("Page must be >= 1");
+        }
+        if (size == null || size <= 0) {
+            throw new IllegalArgumentException("Size must be > 0");
         }
 
-        int validPage = Math.max(1, page);
-        int validSize = Math.max(1, Math.min(size, 200));
+        int validPage = page;
+        int validSize = size;
 
         // 构建查询条件和参数
         List<Object> params = new ArrayList<>();
@@ -254,19 +265,19 @@ public class RecipeServiceImpl implements RecipeService {
     // 辅助方法：构建排序子句
     private String buildOrderByClause(String sort) {
         if (sort == null) {
-            return "ORDER BY r.DatePublished DESC, r.RecipeId DESC";
+            return "ORDER BY r.DatePublished DESC, r.RecipeId ASC";
         }
 
         switch (sort.toLowerCase()) {
             case "rating_desc":
-                return "ORDER BY r.AggregatedRating DESC NULLS LAST, r.RecipeId DESC";
+                return "ORDER BY r.AggregatedRating DESC NULLS LAST, r.RecipeId ASC";
             case "date_desc":
-                return "ORDER BY r.DatePublished DESC, r.RecipeId DESC";
+                return "ORDER BY r.DatePublished DESC, r.RecipeId ASC";
             case "calories_asc":
                 return "ORDER BY r.Calories ASC NULLS LAST, r.RecipeId ASC";
             default:
                 log.warn("Invalid sort parameter '{}', using default 'date_desc'", sort);
-                return "ORDER BY r.DatePublished DESC, r.RecipeId DESC";
+                return "ORDER BY r.DatePublished DESC, r.RecipeId ASC";
         }
     }
 
@@ -371,7 +382,7 @@ public class RecipeServiceImpl implements RecipeService {
                 dto.getFiberContent(),
                 dto.getSugarContent(),
                 dto.getProteinContent(),
-                dto.getRecipeServings(),
+                dto.getRecipeServings() > 0 ? String.valueOf(dto.getRecipeServings()) : null,
                 dto.getRecipeYield()
         );
     }

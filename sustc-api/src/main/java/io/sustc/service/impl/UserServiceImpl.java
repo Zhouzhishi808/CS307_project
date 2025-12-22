@@ -139,7 +139,7 @@ public class UserServiceImpl implements UserService {
 
 
     // 关注/取消关注：切换操作，已关注则取消，未关注则添加
-    // 操作后关注中返回 true，取消关注返回 false
+    // 操作成功后关注中返回 true，取消关注返回 false，操作失败返回 false
     @Override
     public boolean follow(AuthInfo auth, long followeeId) {
         if (!isValidUser(auth)) {
@@ -153,8 +153,8 @@ public class UserServiceImpl implements UserService {
         String checkFolloweeSql = "SELECT COUNT(*) FROM users WHERE AuthorId = ? AND IsDeleted = false";
         Integer count = jdbcTemplate.queryForObject(checkFolloweeSql, Integer.class, followeeId);
         if (count == null || count == 0) {
-            // 原返回 false 导致基准用例不通过，改为抛出 SecurityException（测试允许）
-            throw new SecurityException("follow");
+            // followeeId 不存在，根据新接口定义返回 false 而非抛异常
+            return false;
         }
 
         String checkFollowSql = "SELECT COUNT(*) FROM user_follows WHERE FollowerId = ? AND FollowingId = ?";
