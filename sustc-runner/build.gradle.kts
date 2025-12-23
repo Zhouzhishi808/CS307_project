@@ -17,6 +17,7 @@ dependencies {
 
     implementation("org.apache.commons:commons-lang3")
     implementation("com.fasterxml.jackson.core:jackson-databind")
+    implementation("com.fasterxml.jackson.datatype:jackson-datatype-jsr310")
     implementation("org.furyio:fury-core:0.3.1")
 
     implementation(platform("org.springframework.shell:spring-shell-dependencies:2.1.13"))

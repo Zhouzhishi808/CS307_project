@@ -6,6 +6,12 @@ spring:
     url: jdbc:postgresql://localhost:5432/postgres
     username: postgres
     password: Sirius810975
+  jackson:
+    serialization:
+      write-dates-as-timestamps: false
+    deserialization:
+      adjust-dates-to-context-time-zone: false
+    default-property-inclusion: non_null
 
 db:
   host: localhost
@@ -36,8 +42,10 @@ db:
 
 logging:
   level:
-    root: off
+    root: warn
     io.sustc: debug
+    org.springframework.web: debug
+    org.springframework.security: debug
 
 ---
 

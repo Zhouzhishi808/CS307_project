@@ -1,9 +1,18 @@
+-- Clean up existing users if they exist
+DROP USER IF EXISTS sustc;
+DROP USER IF EXISTS sustc_reader;
+DROP USER IF EXISTS sustc_writer;
+
+-- Create users
+CREATE USER sustc WITH PASSWORD 'sustc';
 CREATE USER sustc_reader WITH PASSWORD '123456';
 CREATE USER sustc_writer WITH PASSWORD '123456';
 
+GRANT CONNECT ON DATABASE postgres TO sustc;
 GRANT CONNECT ON DATABASE postgres TO sustc_reader;
 GRANT CONNECT ON DATABASE postgres TO sustc_writer;
 
+GRANT ALL PRIVILEGES ON SCHEMA public TO sustc;
 GRANT USAGE ON SCHEMA public TO sustc_reader;
 GRANT USAGE ON SCHEMA public TO sustc_writer;
 
@@ -17,3 +26,16 @@ GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO sustc_writer;
 
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO sustc_writer;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO sustc_writer;
+
+-- ADMIN user permissions (full privileges for DDL and management operations)
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO sustc;
+GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO sustc;
+GRANT ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA public TO sustc;
+
+-- Grant create privileges for database objects
+GRANT CREATE ON DATABASE postgres TO sustc;
+
+-- Default privileges for future objects
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO sustc;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO sustc;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON FUNCTIONS TO sustc;
