@@ -23,6 +23,7 @@ import java.math.BigDecimal;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.*;
+import io.sustc.service.util.DBUtil;
 
 @Service
 @Slf4j
@@ -30,6 +31,10 @@ public class ReviewServiceImpl implements ReviewService {
 
     @Autowired
     private JdbcTemplate jdbcTemplate;
+    
+    // Different permission level JdbcTemplates
+    private final JdbcTemplate readerTemplate = DBUtil.getReaderJdbcTemplate();
+    private final JdbcTemplate writerTemplate = DBUtil.getWriterJdbcTemplate();
 
     @Autowired
     private PermissionUtils permissionUtils;
@@ -68,7 +73,7 @@ public class ReviewServiceImpl implements ReviewService {
             String insertSql = "INSERT INTO reviews (ReviewId, RecipeId, AuthorId, Rating, Review, DateSubmitted, DateModified) " +
                     "VALUES (?, ?, ?, ?, ?, ?, ?)";
 
-            int rowsInserted = jdbcTemplate.update(insertSql,
+            int rowsInserted = writerTemplate.update(insertSql,
                     newReviewId, recipeId, userId, rating, review.trim(), now, now);
 
             if (rowsInserted != 1) {
@@ -149,7 +154,7 @@ public class ReviewServiceImpl implements ReviewService {
 
             // === 4. 执行评论更新 ===
             String updateSql = "UPDATE reviews SET Rating = ?, Review = ?, DateModified = CURRENT_TIMESTAMP WHERE ReviewId = ?";
-            int affectedRows = jdbcTemplate.update(updateSql, rating, review.trim(), reviewId);
+            int affectedRows = writerTemplate.update(updateSql, rating, review.trim(), reviewId);
 
             if (affectedRows != 1) {
                 throw new RuntimeException("Failed to update review - unexpected row count: " + affectedRows);
@@ -297,7 +302,7 @@ public class ReviewServiceImpl implements ReviewService {
     private Map<String, Object> getReviewInfoForLogging(long reviewId) {
         try {
             String sql = "SELECT RecipeId, AuthorId, Rating, Review FROM reviews WHERE ReviewId = ?";
-            return jdbcTemplate.queryForObject(sql, (rs, rowNum) -> {
+            return readerTemplate.queryForObject(sql, (rs, rowNum) -> {
                 Map<String, Object> info = new HashMap<>();
                 info.put("recipeId", rs.getLong("RecipeId"));
                 info.put("authorId", rs.getLong("AuthorId"));
@@ -331,7 +336,7 @@ public class ReviewServiceImpl implements ReviewService {
     // 辅助方法：删除评论的所有点赞
     private void deleteReviewLikes(long reviewId) {
         String deleteLikesSql = "DELETE FROM review_likes WHERE ReviewId = ?";
-        int likesDeleted = jdbcTemplate.update(deleteLikesSql, reviewId);
+        int likesDeleted = writerTemplate.update(deleteLikesSql, reviewId);
 
         if (likesDeleted > 0) {
             log.debug("Deleted {} likes for review {}", likesDeleted, reviewId);
@@ -341,7 +346,7 @@ public class ReviewServiceImpl implements ReviewService {
     // 辅助方法：删除评论记录
     private void deleteReviewRecord(long reviewId) {
         String deleteReviewSql = "DELETE FROM reviews WHERE ReviewId = ?";
-        int reviewsDeleted = jdbcTemplate.update(deleteReviewSql, reviewId);
+        int reviewsDeleted = writerTemplate.update(deleteReviewSql, reviewId);
 
         if (reviewsDeleted != 1) {
             throw new RuntimeException(
@@ -477,7 +482,7 @@ public class ReviewServiceImpl implements ReviewService {
         String sql = "SELECT AuthorId, RecipeId FROM reviews WHERE ReviewId = ?";
 
         try {
-            return jdbcTemplate.queryForObject(sql, (rs, rowNum) -> {
+            return readerTemplate.queryForObject(sql, (rs, rowNum) -> {
                 long authorId = rs.getLong("AuthorId");
                 long recipeId = rs.getLong("RecipeId");
                 return new ReviewInfo(authorId, recipeId);
@@ -510,7 +515,7 @@ public class ReviewServiceImpl implements ReviewService {
         String sql = "INSERT INTO review_likes (AuthorId, ReviewId) VALUES (?, ?)";
 
         try {
-            int rowsInserted = jdbcTemplate.update(sql, userId, reviewId);
+            int rowsInserted = writerTemplate.update(sql, userId, reviewId);
 
             if (rowsInserted != 1) {
                 throw new RuntimeException(
@@ -539,7 +544,7 @@ public class ReviewServiceImpl implements ReviewService {
         String sql = "SELECT COUNT(*) FROM review_likes WHERE ReviewId = ?";
 
         try {
-            Long count = jdbcTemplate.queryForObject(sql, Long.class, reviewId);
+            Long count = readerTemplate.queryForObject(sql, Long.class, reviewId);
             return count != null ? count : 0;
         } catch (Exception e) {
             log.error("Error getting like count for review {}: {}", reviewId, e.getMessage());
@@ -599,7 +604,7 @@ public class ReviewServiceImpl implements ReviewService {
         if (hasUserLikedReview(userId, reviewId)) {
             // 删除点赞记录
             String deleteSql = "DELETE FROM review_likes WHERE AuthorId = ? AND ReviewId = ?";
-            jdbcTemplate.update(deleteSql, userId, reviewId);
+            writerTemplate.update(deleteSql, userId, reviewId);
             log.debug("User {} removed like from review {}", userId, reviewId);
         } else {
             log.debug("User {} had not liked review {}, no action needed", userId, reviewId);
@@ -614,7 +619,7 @@ public class ReviewServiceImpl implements ReviewService {
         String sql = "SELECT COUNT(*) FROM review_likes WHERE AuthorId = ? AND ReviewId = ?";
 
         try {
-            Long count = jdbcTemplate.queryForObject(sql, Long.class, userId, reviewId);
+            Long count = readerTemplate.queryForObject(sql, Long.class, userId, reviewId);
             return count != null && count > 0;
         } catch (Exception e) {
             log.error("Error checking if user {} liked review {}: {}", userId, reviewId, e.getMessage());
@@ -650,7 +655,7 @@ public class ReviewServiceImpl implements ReviewService {
 
             // === 2. 查询总记录数 ===
             String countSql = "SELECT COUNT(*) FROM reviews WHERE RecipeId = ?";
-            Long total = jdbcTemplate.queryForObject(countSql, Long.class, recipeId);
+            Long total = readerTemplate.queryForObject(countSql, Long.class, recipeId);
 
             if (total == null || total == 0) {
                 log.debug("No reviews found for recipe {}", recipeId);
@@ -727,7 +732,7 @@ public class ReviewServiceImpl implements ReviewService {
     private List<ReviewRecord> executePaginatedQuery(
             long recipeId, String sql, int limit, int offset
     ) {
-        return jdbcTemplate.query(
+        return readerTemplate.query(
                 sql,
                 new Object[]{recipeId, limit, offset},
                 (rs, rowNum) -> {
@@ -766,7 +771,7 @@ public class ReviewServiceImpl implements ReviewService {
         String sql = "SELECT AuthorId FROM review_likes WHERE ReviewId = ? ORDER BY AuthorId";
 
         try {
-            List<Long> likesList = jdbcTemplate.queryForList(sql, Long.class, reviewId);
+            List<Long> likesList = readerTemplate.queryForList(sql, Long.class, reviewId);
 
             if (likesList == null || likesList.isEmpty()) {
                 return new long[0];
@@ -856,7 +861,7 @@ public class ReviewServiceImpl implements ReviewService {
                         "WHERE RecipeId = ?";
 
         try {
-            Map<String, Object> stats = jdbcTemplate.queryForMap(sql, recipeId);
+            Map<String, Object> stats = readerTemplate.queryForMap(sql, recipeId);
 
             // 现在应该是正确的类型
             Double avgRating = (Double) stats.get("avg_rating");
@@ -875,7 +880,7 @@ public class ReviewServiceImpl implements ReviewService {
     private void updateRecipeRating(long recipeId, RatingStats ratingStats) {
         String updateSql = "UPDATE recipes SET AggregatedRating = ?, ReviewCount = ? WHERE RecipeId = ?";
 
-        int rowsAffected = jdbcTemplate.update(
+        int rowsAffected = writerTemplate.update(
                 updateSql,
                 ratingStats.getAverageRating(),
                 ratingStats.getReviewCount(),
@@ -895,7 +900,7 @@ public class ReviewServiceImpl implements ReviewService {
         String sql = "SELECT * FROM recipes WHERE RecipeId = ?";
 
         try {
-            return jdbcTemplate.queryForObject(sql, (rs, rowNum) -> {
+            return readerTemplate.queryForObject(sql, (rs, rowNum) -> {
                 RecipeRecord recipe = new RecipeRecord();
                 recipe.setRecipeId(rs.getLong("RecipeId"));
                 recipe.setName(rs.getString("Name"));
@@ -945,7 +950,7 @@ public class ReviewServiceImpl implements ReviewService {
         String sql = "SELECT IngredientPart FROM recipe_ingredients WHERE RecipeId = ? ORDER BY IngredientPart";
 
         try {
-            return jdbcTemplate.queryForList(sql, String.class, recipeId);
+            return readerTemplate.queryForList(sql, String.class, recipeId);
         } catch (Exception e) {
             log.warn("Failed to get ingredients for recipe {}: {}", recipeId, e.getMessage());
             return new ArrayList<>();

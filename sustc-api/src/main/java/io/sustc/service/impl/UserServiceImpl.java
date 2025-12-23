@@ -19,6 +19,7 @@ import java.time.Period;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.*;
+import io.sustc.service.util.DBUtil;
 
 
 // TODO: 权限管理优化、高并发测试
@@ -28,6 +29,10 @@ import java.util.*;
 public class UserServiceImpl implements UserService {
     @Autowired
     private JdbcTemplate jdbcTemplate;
+
+    // Different permission level JdbcTemplates
+    private final JdbcTemplate readerTemplate = DBUtil.getReaderJdbcTemplate();
+    private final JdbcTemplate writerTemplate = DBUtil.getWriterJdbcTemplate();
 
     // 注册新用户：验证用户名、性别、年龄，加密密码后插入数据库
     // 返回新用户 ID，失败返回 -1（用户名重复、参数无效等）
@@ -64,7 +69,7 @@ public class UserServiceImpl implements UserService {
                 "VALUES (?, ?, ?, ?, ?, 0, 0, false)";
 
         try {
-            int rows = jdbcTemplate.update(sql, nextId, req.getName(), gender, age, hash);
+            int rows = writerTemplate.update(sql, nextId, req.getName(), gender, age, hash);
             if (rows == 1) {
                 return nextId;
             }
@@ -86,7 +91,7 @@ public class UserServiceImpl implements UserService {
         String sql = "SELECT Password FROM users WHERE AuthorId = ? AND IsDeleted = false";
 
         try {
-            String stored = jdbcTemplate.queryForObject(sql, String.class, auth.getAuthorId());
+            String stored = readerTemplate.queryForObject(sql, String.class, auth.getAuthorId());
 
             if (stored != null && (stored.equals(auth.getPassword()) || PasswordUtil.verifyPassword(auth.getPassword(), stored))) {
                 return auth.getAuthorId();
@@ -118,7 +123,7 @@ public class UserServiceImpl implements UserService {
 
         String checkSql = "SELECT IsDeleted FROM users WHERE AuthorId = ?";
         try {
-            Boolean isDeleted = jdbcTemplate.queryForObject(checkSql, Boolean.class, userId);
+            Boolean isDeleted = readerTemplate.queryForObject(checkSql, Boolean.class, userId);
             if (isDeleted == null) {
                 throw new IllegalArgumentException("deleteAccount");
             }
@@ -129,8 +134,8 @@ public class UserServiceImpl implements UserService {
             throw new IllegalArgumentException("deleteAccount");
         }
 
-        jdbcTemplate.update("DELETE FROM user_follows WHERE FollowerId = ? OR FollowingId = ?", userId, userId);
-        jdbcTemplate.update("UPDATE users SET IsDeleted = true WHERE AuthorId = ?", userId);
+        writerTemplate.update("DELETE FROM user_follows WHERE FollowerId = ? OR FollowingId = ?", userId, userId);
+        writerTemplate.update("UPDATE users SET IsDeleted = true WHERE AuthorId = ?", userId);
 
         return true;
     }
@@ -151,21 +156,21 @@ public class UserServiceImpl implements UserService {
         }
 
         String checkFolloweeSql = "SELECT COUNT(*) FROM users WHERE AuthorId = ? AND IsDeleted = false";
-        Integer count = jdbcTemplate.queryForObject(checkFolloweeSql, Integer.class, followeeId);
+        Integer count = readerTemplate.queryForObject(checkFolloweeSql, Integer.class, followeeId);
         if (count == null || count == 0) {
             // followeeId 不存在，根据新接口定义返回 false 而非抛异常
             return false;
         }
 
         String checkFollowSql = "SELECT COUNT(*) FROM user_follows WHERE FollowerId = ? AND FollowingId = ?";
-        Integer followCount = jdbcTemplate.queryForObject(checkFollowSql, Integer.class, auth.getAuthorId(), followeeId);
+        Integer followCount = readerTemplate.queryForObject(checkFollowSql, Integer.class, auth.getAuthorId(), followeeId);
 
         if (followCount != null && followCount > 0) {
-            jdbcTemplate.update("DELETE FROM user_follows WHERE FollowerId = ? AND FollowingId = ?",
+            writerTemplate.update("DELETE FROM user_follows WHERE FollowerId = ? AND FollowingId = ?",
                 auth.getAuthorId(), followeeId);
             return false;
         } else {
-            jdbcTemplate.update("INSERT INTO user_follows (FollowerId, FollowingId) VALUES (?, ?)",
+            writerTemplate.update("INSERT INTO user_follows (FollowerId, FollowingId) VALUES (?, ?)",
                 auth.getAuthorId(), followeeId);
             return true;
         }
@@ -178,7 +183,7 @@ public class UserServiceImpl implements UserService {
     public UserRecord getById(long userId) {
         try {
             String sql = "SELECT * FROM public.users WHERE AuthorId = ?";
-            UserRecord user = jdbcTemplate.queryForObject(sql, (rs, rowNum) -> {
+            UserRecord user = readerTemplate.queryForObject(sql, (rs, rowNum) -> {
                 UserRecord u = new UserRecord();
                 u.setAuthorId(rs.getLong("AuthorId"));
                 u.setAuthorName(rs.getString("AuthorName"));
@@ -252,7 +257,7 @@ public class UserServiceImpl implements UserService {
         sql.append(" WHERE AuthorId = ?");
         params.add(auth.getAuthorId());
 
-        jdbcTemplate.update(sql.toString(), params.toArray());
+        writerTemplate.update(sql.toString(), params.toArray());
     }
 
     // 获取用户关注的人发布的食谱列表（feed 流）
@@ -298,7 +303,7 @@ public class UserServiceImpl implements UserService {
         dataSql.append(" ORDER BY r.DatePublished DESC, r.RecipeId DESC LIMIT ? OFFSET ?");
 
         log.debug("Executing count SQL: {}, params: {}", countSql.toString(), params);
-        Long total = jdbcTemplate.queryForObject(countSql.toString(), Long.class, params.toArray());
+        Long total = readerTemplate.queryForObject(countSql.toString(), Long.class, params.toArray());
         log.debug("Count query result: {}", total);
         
         if (total == null || total == 0) {
@@ -316,7 +321,7 @@ public class UserServiceImpl implements UserService {
         dataParams.add((page - 1) * size);
 
         log.debug("Executing data SQL: {}, params: {}", dataSql.toString(), dataParams);
-        List<FeedItem> items = jdbcTemplate.query(dataSql.toString(), dataParams.toArray(), (rs, rowNum) -> {
+        List<FeedItem> items = readerTemplate.query(dataSql.toString(), dataParams.toArray(), (rs, rowNum) -> {
             FeedItem item = new FeedItem();
             item.setRecipeId(rs.getLong("RecipeId"));
             item.setName(rs.getString("Name"));
@@ -369,7 +374,7 @@ public class UserServiceImpl implements UserService {
                 "ORDER BY Ratio DESC, u.AuthorId ASC LIMIT 1";
 
         try {
-            return jdbcTemplate.queryForObject(sql, (rs, rowNum) -> {
+            return readerTemplate.queryForObject(sql, (rs, rowNum) -> {
                 Map<String, Object> result = new HashMap<>();
                 result.put("AuthorId", rs.getLong("AuthorId"));
                 result.put("AuthorName", rs.getString("AuthorName"));
@@ -390,7 +395,7 @@ public class UserServiceImpl implements UserService {
 
         String sql = "SELECT IsDeleted FROM users WHERE AuthorId = ?";
         try {
-            Boolean isDeleted = jdbcTemplate.queryForObject(sql, Boolean.class, auth.getAuthorId());
+            Boolean isDeleted = readerTemplate.queryForObject(sql, Boolean.class, auth.getAuthorId());
             return isDeleted != null && !isDeleted;
         } catch (EmptyResultDataAccessException e) {
             return false;
@@ -405,7 +410,7 @@ public class UserServiceImpl implements UserService {
 
         String sql = "SELECT Password FROM users WHERE AuthorId = ? AND IsDeleted = false";
         try {
-            String hash = jdbcTemplate.queryForObject(sql, String.class, auth.getAuthorId());
+            String hash = readerTemplate.queryForObject(sql, String.class, auth.getAuthorId());
             return hash != null && (hash.equals(auth.getPassword()) || PasswordUtil.verifyPassword(auth.getPassword(), hash));
         } catch (EmptyResultDataAccessException e) {
             return false;

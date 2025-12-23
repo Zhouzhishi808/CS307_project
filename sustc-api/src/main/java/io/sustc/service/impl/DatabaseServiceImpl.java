@@ -18,6 +18,7 @@ import javax.sql.DataSource;
 import java.sql.Connection;
 import java.sql.ResultSet;
 import java.util.List;
+import io.sustc.service.util.DBUtil;
 
 
 
@@ -56,20 +57,25 @@ public class DatabaseServiceImpl implements DatabaseService {
             List<UserRecord> userRecords,
             List<RecipeRecord> recipeRecords) {
 
-        // ddl to create tables.
-        createTables();
+        // Use admin connection for DDL operations
+        try (Connection conn = DBUtil.getAdminConnection()) {
+            // ddl to create tables.
+            createTables();
+            
+            // Use writer connection for data import
+            importUsers(userRecords);
+            importUserFollows(userRecords);
+            importRecipes(recipeRecords);
+            importRecipeIngredients(recipeRecords);
+            importReviews(reviewRecords);
+            importReviewLikes(reviewRecords);
 
-        // TODO: implement your import logic
-        importUsers(userRecords);
-        importUserFollows(userRecords);
-        importRecipes(recipeRecords);
-        importRecipeIngredients(recipeRecords);
-        importReviews(reviewRecords);
-        importReviewLikes(reviewRecords);
-
-        createTriggers();
-        createViews();
-        createIndexes();
+            createTriggers();
+            createViews();
+            createIndexes();
+        } catch (SQLException e) {
+            throw new RuntimeException("Failed to import data", e);
+        }
     }
 
     public void createTriggers() {
@@ -472,7 +478,8 @@ public class DatabaseServiceImpl implements DatabaseService {
                 "        EXECUTE 'DROP TABLE IF EXISTS ' || QUOTE_IDENT(t.tablename) || ' CASCADE;';\n" +
                 "    END LOOP;\n" +
                 "END $$;\n";
-        try (Connection conn = dataSource.getConnection();
+        // Use admin connection for DROP operations
+        try (Connection conn = DBUtil.getAdminConnection();
              PreparedStatement stmt = conn.prepareStatement(sql)) {
             stmt.executeUpdate();
         } catch (SQLException e) {

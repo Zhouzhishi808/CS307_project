@@ -16,7 +16,7 @@ dependencies {
     implementation("org.springframework.boot:spring-boot-starter-cache")
     // 添加OpenCSV依赖
     implementation("com.opencsv:opencsv:5.7.1")
-    // 添加Caffeine高性能缓存
+    // 添加Caffeine缓存
     //implementation("com.github.ben-manes.caffeine:caffeine:3.1.8")
     implementation("org.furyio:fury-core:0.3.1")
 

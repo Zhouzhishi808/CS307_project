@@ -1,12 +1,38 @@
+server:
+  port: 8081
+
 spring:
   datasource:
-    url: jdbc:postgresql://localhost:5432/postgres # change this to your own jdbc url
-    username: postgres  # change this to your own username (avoid using a superuser)
-    password: Sirius810975  # change this to your own password
+    url: jdbc:postgresql://localhost:5432/postgres
+    username: postgres
+    password: Sirius810975
+
+db:
+  host: localhost
+  port: 5432
+  name: postgres
+  user: postgres
+  password: Fs921012
+  writer:
+    user: sustc_writer
+    password: 123456
+  reader:
+    user: sustc_reader
+    password: 123456
 
     hikari:
       connection-timeout: 180000
       leak-detection-threshold: 120000
+
+      maximum-pool-size: 2500
+      minimum-idle: 20
+      idle-timeout: 600000
+      max-lifetime: 1800000
+
+  cache:
+    type: caffeine
+    caffeine:
+      spec: maximumSize=10000,expireAfterWrite=30m,expireAfterAccess=15m
 
 logging:
   level:

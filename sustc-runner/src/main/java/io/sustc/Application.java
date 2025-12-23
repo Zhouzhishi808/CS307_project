@@ -6,10 +6,12 @@ import lombok.val;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.event.ApplicationStartedEvent;
+import org.springframework.cache.annotation.EnableCaching;
 import org.springframework.context.event.EventListener;
 import org.springframework.shell.ShellApplicationRunner;
 
 @SpringBootApplication
+@EnableCaching
 @Slf4j
 public class Application {
 

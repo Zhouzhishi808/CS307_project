@@ -20,6 +20,7 @@ import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeParseException;
 import java.util.*;
+import io.sustc.service.util.DBUtil;
 
 @Service
 @Slf4j
@@ -27,6 +28,10 @@ public class RecipeServiceImpl implements RecipeService {
 
     @Autowired
     private JdbcTemplate jdbcTemplate;
+
+    // Different permission level JdbcTemplates
+    private final JdbcTemplate readerTemplate = DBUtil.getReaderJdbcTemplate();
+    private final JdbcTemplate writerTemplate = DBUtil.getWriterJdbcTemplate();
 
     @Override
     @Cacheable(value = "recipeNames", key = "#id")
@@ -37,7 +42,7 @@ public class RecipeServiceImpl implements RecipeService {
 
         try {
             String sql = "SELECT Name FROM recipes WHERE RecipeId = ?";
-            return jdbcTemplate.queryForObject(sql, String.class, id);
+            return readerTemplate.queryForObject(sql, String.class, id);
         } catch (EmptyResultDataAccessException e) {
             return null;
         } catch (Exception e) {
@@ -59,7 +64,7 @@ public class RecipeServiceImpl implements RecipeService {
             String sql = "SELECT r.*, u.AuthorName FROM recipes r " +
                     "LEFT JOIN users u ON r.AuthorId = u.AuthorId " +
                     "WHERE r.RecipeId = ?";
-            RecipeRecord recipe = jdbcTemplate.queryForObject(sql, (rs, rowNum) -> {
+            RecipeRecord recipe = readerTemplate.queryForObject(sql, (rs, rowNum) -> {
                 return mapResultSetToRecipeRecord(rs, true);  // 获取食材
             }, recipeId);
 
@@ -172,7 +177,7 @@ public class RecipeServiceImpl implements RecipeService {
         String sql = "SELECT IngredientPart FROM recipe_ingredients WHERE RecipeId = ? ORDER BY LOWER(IngredientPart)";
 
         try {
-            List<String> ingredientsList = jdbcTemplate.queryForList(sql, String.class, recipeId);
+            List<String> ingredientsList = readerTemplate.queryForList(sql, String.class, recipeId);
             if (ingredientsList == null) {
                 return new String[0];
             }
@@ -225,7 +230,7 @@ public class RecipeServiceImpl implements RecipeService {
 
         // 查询总记录数（使用表别名 r 以匹配 WHERE 子句）
         String countSql = "SELECT COUNT(*) FROM recipes r" + whereClause.toString();
-        Long total = jdbcTemplate.queryForObject(countSql, Long.class, params.toArray());
+        Long total = readerTemplate.queryForObject(countSql, Long.class, params.toArray());
         if (total == null) total = 0L;
 
         // 如果总记录数为0，直接返回空结果
@@ -250,7 +255,7 @@ public class RecipeServiceImpl implements RecipeService {
         queryParams.add((validPage - 1) * validSize);
 
         // 执行查询
-        List<RecipeRecord> recipes = jdbcTemplate.query(querySql, queryParams.toArray(), (rs, rowNum) ->
+        List<RecipeRecord> recipes = readerTemplate.query(querySql, queryParams.toArray(), (rs, rowNum) ->
             mapResultSetToRecipeRecord(rs, true)  // mapResultSetToRecipeRecord 已经会获取食材
         );
 
@@ -318,7 +323,7 @@ public class RecipeServiceImpl implements RecipeService {
 
         String sql = "SELECT COUNT(*) FROM users WHERE AuthorId = ? AND IsDeleted = false";
         try {
-            Integer count = jdbcTemplate.queryForObject(sql, Integer.class, auth.getAuthorId());
+            Integer count = readerTemplate.queryForObject(sql, Integer.class, auth.getAuthorId());
             return count != null && count > 0;
         } catch (EmptyResultDataAccessException e) {
             return false;
@@ -345,7 +350,7 @@ public class RecipeServiceImpl implements RecipeService {
     private long generateNewRecipeId() {
         String sql = "SELECT COALESCE(MAX(RecipeId), 0) FROM recipes";
         try {
-            Long maxId = jdbcTemplate.queryForObject(sql, Long.class);
+            Long maxId = readerTemplate.queryForObject(sql, Long.class);
             return (maxId != null ? maxId : 0) + 1;
         } catch (Exception e) {
             return 1L;
@@ -361,7 +366,7 @@ public class RecipeServiceImpl implements RecipeService {
                 "ProteinContent, RecipeServings, RecipeYield) " +
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
-        jdbcTemplate.update(sql,
+        writerTemplate.update(sql,
                 recipeId,
                 dto.getName(),
                 authorId,
@@ -399,7 +404,7 @@ public class RecipeServiceImpl implements RecipeService {
         }
 
         if (!batchArgs.isEmpty()) {
-            jdbcTemplate.batchUpdate(sql, batchArgs);
+            writerTemplate.batchUpdate(sql, batchArgs);
         }
     }
 
@@ -435,7 +440,7 @@ public class RecipeServiceImpl implements RecipeService {
     private void validateRecipeOwnership(long recipeId, long userId) {
         String sql = "SELECT AuthorId FROM recipes WHERE RecipeId = ?";
         try {
-            Long authorId = jdbcTemplate.queryForObject(sql, Long.class, recipeId);
+            Long authorId = readerTemplate.queryForObject(sql, Long.class, recipeId);
             if (authorId == null) {
                 throw new IllegalArgumentException("Recipe does not exist");
             }
@@ -450,25 +455,25 @@ public class RecipeServiceImpl implements RecipeService {
     // 辅助方法：删除食谱的评论点赞
     private void deleteReviewLikesForRecipe(long recipeId) {
         String sql = "DELETE FROM review_likes WHERE ReviewId IN (SELECT ReviewId FROM reviews WHERE RecipeId = ?)";
-        jdbcTemplate.update(sql, recipeId);
+        writerTemplate.update(sql, recipeId);
     }
 
     // 辅助方法：删除食谱的评论
     private void deleteReviewsForRecipe(long recipeId) {
         String sql = "DELETE FROM reviews WHERE RecipeId = ?";
-        jdbcTemplate.update(sql, recipeId);
+        writerTemplate.update(sql, recipeId);
     }
 
     // 辅助方法：删除食谱的食材
     private void deleteRecipeIngredients(long recipeId) {
         String sql = "DELETE FROM recipe_ingredients WHERE RecipeId = ?";
-        jdbcTemplate.update(sql, recipeId);
+        writerTemplate.update(sql, recipeId);
     }
 
     // 辅助方法：删除食谱记录
     private void deleteRecipeRecord(long recipeId) {
         String sql = "DELETE FROM recipes WHERE RecipeId = ?";
-        jdbcTemplate.update(sql, recipeId);
+        writerTemplate.update(sql, recipeId);
     }
 
     @Override
@@ -515,7 +520,7 @@ public class RecipeServiceImpl implements RecipeService {
 
         if (cookTimeIso == null || prepTimeIso == null) {
             String sql = "SELECT CookTime, PrepTime FROM recipes WHERE RecipeId = ?";
-            Map<String, Object> result = jdbcTemplate.queryForMap(sql, recipeId);
+            Map<String, Object> result = readerTemplate.queryForMap(sql, recipeId);
             originalCookTime = (String) result.get("CookTime");
             originalPrepTime = (String) result.get("PrepTime");
         }
@@ -569,7 +574,7 @@ public class RecipeServiceImpl implements RecipeService {
     // 辅助方法：更新食谱时间
     private void updateRecipeTimes(long recipeId, String cookTime, String prepTime, String totalTime) {
         String sql = "UPDATE recipes SET CookTime = ?, PrepTime = ?, TotalTime = ? WHERE RecipeId = ?";
-        jdbcTemplate.update(sql, cookTime, prepTime, totalTime, recipeId);
+        writerTemplate.update(sql, cookTime, prepTime, totalTime, recipeId);
     }
 
     @Override
@@ -586,7 +591,7 @@ public class RecipeServiceImpl implements RecipeService {
             """;
 
         try {
-            return jdbcTemplate.query(sql, rs -> {
+            return readerTemplate.query(sql, rs -> {
                 if (!rs.next()) {
                     return null;
                 }
@@ -615,7 +620,7 @@ public class RecipeServiceImpl implements RecipeService {
             LIMIT 3
             """;
 
-        return jdbcTemplate.query(sql, (rs, i) -> {
+        return readerTemplate.query(sql, (rs, i) -> {
             Map<String, Object> row = new HashMap<>();
             row.put("RecipeId", rs.getLong("RecipeId"));
             row.put("Name", rs.getString("Name"));
