@@ -20,7 +20,7 @@ build/
 benchmark-*.json
 
 ### Personal Config ###
-sustc-runner/src/main/resources/application.yml
+#sustc-runner/src/main/resources/application.yml
 
 
 
