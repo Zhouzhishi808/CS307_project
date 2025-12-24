@@ -10,6 +10,7 @@ import org.springframework.cache.annotation.Cacheable;
 import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -479,7 +480,7 @@ public class RecipeServiceImpl implements RecipeService {
     @Override
     @Transactional
     @CacheEvict(value = {"recipes", "recipeNames"}, key = "#recipeId")
-    public void updateTimes(AuthInfo auth, long recipeId, String cookTimeIso, String prepTimeIso) {
+    public void updateTimes(AuthInfo auth, long recipeId, @Nullable String cookTimeIso, @Nullable String prepTimeIso) {
         // 1. 验证权限
         if (!validateAuthAndPermission(auth)) {
             throw new SecurityException("Invalid or inactive user");
@@ -521,8 +522,8 @@ public class RecipeServiceImpl implements RecipeService {
         if (cookTimeIso == null || prepTimeIso == null) {
             String sql = "SELECT CookTime, PrepTime FROM recipes WHERE RecipeId = ?";
             Map<String, Object> result = readerTemplate.queryForMap(sql, recipeId);
-            originalCookTime = (String) result.get("CookTime");
-            originalPrepTime = (String) result.get("PrepTime");
+            originalCookTime = (String) result.get("cooktime");
+            originalPrepTime = (String) result.get("preptime");
         }
 
         // 5. 计算总时间
