@@ -2,6 +2,8 @@ package io.sustc.service.util;
 
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
+import com.zaxxer.hikari.HikariConfig;
+import com.zaxxer.hikari.HikariDataSource;
 import javax.sql.DataSource;
 import java.sql.Connection;
 import java.sql.DriverManager;
@@ -15,8 +17,8 @@ public class DBUtil {
     private static final String DB_URL = String.format("jdbc:postgresql://%s:%s/%s", DB_HOST, DB_PORT, DB_NAME);
     
     // Admin credentials (for DDL operations like drop/import)
-    private static final String ADMIN_USER = System.getProperty("db.user", "sustc");
-    private static final String ADMIN_PASSWORD = System.getProperty("db.password", "sustc");
+    private static final String ADMIN_USER = System.getProperty("db.user", "postgres");
+    private static final String ADMIN_PASSWORD = System.getProperty("db.password", "Fs921012");
     
     // Writer credentials (for DML operations like insert/update/delete)
     private static final String WRITER_USER = System.getProperty("db.writer.user", "sustc_writer");
@@ -26,26 +28,46 @@ public class DBUtil {
     private static final String READER_USER = System.getProperty("db.reader.user", "sustc_reader");
     private static final String READER_PASSWORD = System.getProperty("db.reader.password", "123456");
     
+    // Unified HikariCP DataSource for all operations
+    private static HikariDataSource unifiedDataSource;
+    
     static {
         try {
             Class.forName("org.postgresql.Driver");
+            initializeUnifiedDataSource();
         } catch (ClassNotFoundException e) {
             throw new RuntimeException("Failed to load PostgreSQL driver", e);
         }
     }
     
+    private static void initializeUnifiedDataSource() {
+        // Initialize unified connection pool with large capacity for high concurrency
+        HikariConfig config = new HikariConfig();
+        config.setJdbcUrl(DB_URL);
+        config.setUsername(ADMIN_USER);  // Use admin credentials for unified access
+        config.setPassword(ADMIN_PASSWORD);
+        config.setMaximumPoolSize(3000);  // Support 2048+ concurrent users
+        config.setMinimumIdle(500);
+        config.setConnectionTimeout(30000);
+        config.setIdleTimeout(600000);
+        config.setMaxLifetime(1800000);
+        config.setLeakDetectionThreshold(60000);
+        config.setPoolName("UnifiedPool");
+        unifiedDataSource = new HikariDataSource(config);
+    }
+    
 
     public static Connection getAdminConnection() throws SQLException {
-        return DriverManager.getConnection(DB_URL, ADMIN_USER, ADMIN_PASSWORD);
+        return unifiedDataSource.getConnection();
     }
     
 
     public static Connection getWriterConnection() throws SQLException {
-        return DriverManager.getConnection(DB_URL, WRITER_USER, WRITER_PASSWORD);
+        return unifiedDataSource.getConnection();
     }
 
     public static Connection getReaderConnection() throws SQLException {
-        return DriverManager.getConnection(DB_URL, READER_USER, READER_PASSWORD);
+        return unifiedDataSource.getConnection();
     }
 
     public static void closeConnection(Connection conn) {
@@ -60,29 +82,20 @@ public class DBUtil {
     }
 
     public static JdbcTemplate getAdminJdbcTemplate() {
-        DriverManagerDataSource dataSource = new DriverManagerDataSource();
-        dataSource.setDriverClassName("org.postgresql.Driver");
-        dataSource.setUrl(DB_URL);
-        dataSource.setUsername(ADMIN_USER);
-        dataSource.setPassword(ADMIN_PASSWORD);
-        return new JdbcTemplate(dataSource);
+        return new JdbcTemplate(unifiedDataSource);
     }
 
     public static JdbcTemplate getWriterJdbcTemplate() {
-        DriverManagerDataSource dataSource = new DriverManagerDataSource();
-        dataSource.setDriverClassName("org.postgresql.Driver");
-        dataSource.setUrl(DB_URL);
-        dataSource.setUsername(WRITER_USER);
-        dataSource.setPassword(WRITER_PASSWORD);
-        return new JdbcTemplate(dataSource);
+        return new JdbcTemplate(unifiedDataSource);
     }
 
     public static JdbcTemplate getReaderJdbcTemplate() {
-        DriverManagerDataSource dataSource = new DriverManagerDataSource();
-        dataSource.setDriverClassName("org.postgresql.Driver");
-        dataSource.setUrl(DB_URL);
-        dataSource.setUsername(READER_USER);
-        dataSource.setPassword(READER_PASSWORD);
-        return new JdbcTemplate(dataSource);
+        return new JdbcTemplate(unifiedDataSource);
+    }
+    
+    public static void shutdown() {
+        if (unifiedDataSource != null) {
+            unifiedDataSource.close();
+        }
     }
 }

@@ -1,11 +1,11 @@
 server:
-  port: 8081
+  port: 8082
 
 spring:
   datasource:
     url: jdbc:postgresql://localhost:5432/postgres
     username: postgres
-    password: Sirius810975
+    password: Fs921012
   jackson:
     serialization:
       write-dates-as-timestamps: false
@@ -27,11 +27,11 @@ db:
     password: 123456
 
     hikari:
-      connection-timeout: 180000
-      leak-detection-threshold: 120000
+      connection-timeout: 30000
+      leak-detection-threshold: 60000
 
-      maximum-pool-size: 2500
-      minimum-idle: 20
+      maximum-pool-size: 3000
+      minimum-idle: 200
       idle-timeout: 600000
       max-lifetime: 1800000
 

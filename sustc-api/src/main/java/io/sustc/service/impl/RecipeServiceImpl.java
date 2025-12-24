@@ -448,7 +448,7 @@ public class RecipeServiceImpl implements RecipeService {
                 throw new SecurityException("User is not the author of this recipe");
             }
         } catch (EmptyResultDataAccessException e) {
-            throw new IllegalArgumentException("Recipe does not exist");
+            throw new IllegalArgumentException("不是食谱所有者");
         }
     }
 

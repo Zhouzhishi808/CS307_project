@@ -12,6 +12,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.CachePut;
 import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.jdbc.core.BeanPropertyRowMapper;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -365,7 +366,7 @@ public class ReviewServiceImpl implements ReviewService {
                             "ReviewCount = (SELECT COUNT(*) FROM reviews WHERE RecipeId = ?) " +
                             "WHERE RecipeId = ?";
 
-            int updated = jdbcTemplate.update(updateSql, recipeId, recipeId, recipeId);
+            int updated = writerTemplate.update(updateSql, recipeId, recipeId, recipeId);
 
             if (updated == 1) {
                 log.debug("Successfully refreshed recipe rating for recipe {}", recipeId);
@@ -511,6 +512,7 @@ public class ReviewServiceImpl implements ReviewService {
     }
 
     // 辅助方法：插入点赞记录
+    @CacheEvict(value = {"userLiked", "reviewLikes"}, key = "#userId + '_' + #reviewId")
     private void insertLike(long userId, long reviewId) {
         String sql = "INSERT INTO review_likes (AuthorId, ReviewId) VALUES (?, ?)";
 
@@ -540,6 +542,7 @@ public class ReviewServiceImpl implements ReviewService {
     }
 
     // 辅助方法：获取评论的点赞数
+    @Cacheable(value = "reviewLikes", key = "#reviewId")
     private long getReviewLikeCount(long reviewId) {
         String sql = "SELECT COUNT(*) FROM review_likes WHERE ReviewId = ?";
 
@@ -599,6 +602,7 @@ public class ReviewServiceImpl implements ReviewService {
     }
 
     // 辅助方法：处理取消点赞的核心逻辑
+    @CacheEvict(value = {"userLiked", "reviewLikes"}, allEntries = true)
     private long processUnlike(long userId, long reviewId) {
         // 检查用户是否已经点赞
         if (hasUserLikedReview(userId, reviewId)) {
@@ -615,6 +619,7 @@ public class ReviewServiceImpl implements ReviewService {
     }
 
     // 工具方法：检查用户是否已经点赞（如果类中没有，需要添加）
+    @Cacheable(value = "userLiked", key = "#userId + '_' + #reviewId")
     private boolean hasUserLikedReview(long userId, long reviewId) {
         String sql = "SELECT COUNT(*) FROM review_likes WHERE AuthorId = ? AND ReviewId = ?";
 
@@ -964,7 +969,7 @@ public class ReviewServiceImpl implements ReviewService {
         }
         String sql = "SELECT Password FROM users WHERE AuthorId = ? AND IsDeleted = false";
         try {
-            String stored = jdbcTemplate.queryForObject(sql, String.class, auth.getAuthorId());
+            String stored = readerTemplate.queryForObject(sql, String.class, auth.getAuthorId());
             if (stored == null) {
                 throw new SecurityException("Invalid user credentials or inactive account");
             }
