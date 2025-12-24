@@ -12,10 +12,10 @@ plugins {
 
 dependencies {
     implementation("org.springframework.boot:spring-boot-starter-jdbc")
-    implementation("org.springframework.boot:spring-boot-starter-web")
+    //implementation("org.springframework.boot:spring-boot-starter-web")
     implementation("org.springframework.boot:spring-boot-starter-cache")
     // 添加Jackson JSR310支持
-    implementation("com.fasterxml.jackson.datatype:jackson-datatype-jsr310")
+    //implementation("com.fasterxml.jackson.datatype:jackson-datatype-jsr310")
     // 添加OpenCSV依赖
     implementation("com.opencsv:opencsv:5.7.1")
     // 添加Caffeine缓存
