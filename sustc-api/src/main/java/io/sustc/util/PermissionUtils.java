@@ -17,24 +17,38 @@ public class PermissionUtils {
     @Autowired
     private JdbcTemplate jdbcTemplate;
 
-    //检验用户是否存在
+    //检验用户是否存在并验证密码
     public long validateUser(AuthInfo auth) {
         if (auth == null || auth.getAuthorId() <= 0) {
             log.warn("Invalid auth info: {}", auth);
             return -1L;
         }
 
-        String sql = "SELECT COUNT(*) FROM users WHERE AuthorId = ? AND IsDeleted = false";
+        // 验证密码字段不为空
+        if (auth.getPassword() == null || auth.getPassword().trim().isEmpty()) {
+            log.warn("Password is required for user {}", auth.getAuthorId());
+            return -1L;
+        }
+
+        // 查询用户密码
+        String sql = "SELECT Password FROM users WHERE AuthorId = ? AND IsDeleted = false";
         try {
-            Integer count = jdbcTemplate.queryForObject(sql, Integer.class, auth.getAuthorId());
-            if (count != null && count > 0) {
+            String storedPassword = jdbcTemplate.queryForObject(sql, String.class, auth.getAuthorId());
+
+            // 验证密码：支持明文和哈希两种方式
+            if (storedPassword != null &&
+                (storedPassword.equals(auth.getPassword()) ||
+                 PasswordUtil.verifyPassword(auth.getPassword(), storedPassword))) {
                 return auth.getAuthorId();
+            } else {
+                log.warn("Invalid password for user {}", auth.getAuthorId());
+                return -1L;
             }
         } catch (EmptyResultDataAccessException e) {
-            // 用户不存在
+            // 用户不存在或已被删除
+            log.warn("User {} not found or inactive", auth.getAuthorId());
+            return -1L;
         }
-        log.warn("User {} not found or inactive", auth.getAuthorId());
-        return -1L;
     }
 
     public boolean isRecipeAuthor(long userId, long recipeId) {

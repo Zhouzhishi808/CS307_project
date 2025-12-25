@@ -169,7 +169,7 @@ public class RecipeServiceImpl implements RecipeService {
 
     // 辅助方法：获取食谱的食材数组（按忽略大小写的字典序排序）
     private String[] getRecipeIngredientsArray(long recipeId) {
-        String sql = "SELECT IngredientPart FROM recipe_ingredients WHERE RecipeId = ? ORDER BY LOWER(IngredientPart)";
+        String sql = "SELECT IngredientPart FROM recipe_ingredients WHERE RecipeId = ? ORDER BY LOWER(IngredientPart) COLLATE \"C\"";
 
         try {
             List<String> ingredientsList = jdbcTemplate.queryForList(sql, String.class, recipeId);
@@ -202,7 +202,8 @@ public class RecipeServiceImpl implements RecipeService {
 
         // 关键字搜索（在名称和描述中模糊匹配）
         if (keyword != null && !keyword.trim().isEmpty()) {
-            whereClause.append(" AND (LOWER(r.Name) LIKE LOWER(?) OR LOWER(r.Description) LIKE LOWER(?))");
+            // 使用ILIKE实现大小写不敏感的模糊匹配（PostgreSQL特性）
+            whereClause.append(" AND (r.Name ILIKE ? OR r.Description ILIKE ?)");
             String likeKeyword = "%" + keyword.trim() + "%";
             params.add(likeKeyword);
             params.add(likeKeyword);
@@ -265,19 +266,27 @@ public class RecipeServiceImpl implements RecipeService {
     // 辅助方法：构建排序子句
     private String buildOrderByClause(String sort) {
         if (sort == null) {
-            return "ORDER BY r.DatePublished DESC, r.RecipeId ASC";
+            return "ORDER BY r.DatePublished DESC, r.RecipeId DESC";
         }
 
         switch (sort.toLowerCase()) {
             case "rating_desc":
-                return "ORDER BY r.AggregatedRating DESC NULLS LAST, r.RecipeId ASC";
+                return "ORDER BY r.AggregatedRating DESC NULLS LAST, r.RecipeId DESC";
             case "date_desc":
-                return "ORDER BY r.DatePublished DESC, r.RecipeId ASC";
+                return "ORDER BY r.DatePublished DESC, r.RecipeId DESC";
+            case "date_asc":
+                return "ORDER BY r.DatePublished ASC, r.RecipeId DESC";
             case "calories_asc":
-                return "ORDER BY r.Calories ASC NULLS LAST, r.RecipeId ASC";
+                return "ORDER BY r.Calories ASC NULLS LAST, r.RecipeId DESC";
+            case "calories_desc":
+                return "ORDER BY r.Calories DESC NULLS LAST, r.RecipeId DESC";
+            case "id_desc":
+                return "ORDER BY r.RecipeId DESC";
+            case "id_asc":
+                return "ORDER BY r.RecipeId ASC";
             default:
                 log.warn("Invalid sort parameter '{}', using default 'date_desc'", sort);
-                return "ORDER BY r.DatePublished DESC, r.RecipeId ASC";
+                return "ORDER BY r.DatePublished DESC, r.RecipeId DESC";
         }
     }
 
@@ -334,11 +343,6 @@ public class RecipeServiceImpl implements RecipeService {
         if (dto.getName() == null || dto.getName().trim().isEmpty()) {
             throw new IllegalArgumentException("Recipe name cannot be null or empty");
         }
-
-        // 验证分类（可选）
-        if (dto.getRecipeCategory() != null && dto.getRecipeCategory().length() > 255) {
-            throw new IllegalArgumentException("Recipe category is too long");
-        }
     }
 
     // 辅助方法：生成新的RecipeId
@@ -361,6 +365,12 @@ public class RecipeServiceImpl implements RecipeService {
                 "ProteinContent, RecipeServings, RecipeYield) " +
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
+        // 处理AggregatedRating：如果 > 0 使用该值，否则设置为null（参考DatabaseServiceImpl的逻辑）
+        Float aggregatedRating = null;
+        if (dto.getAggregatedRating() > 0) {
+            aggregatedRating = dto.getAggregatedRating();
+        }
+
         jdbcTemplate.update(sql,
                 recipeId,
                 dto.getName(),
@@ -371,7 +381,7 @@ public class RecipeServiceImpl implements RecipeService {
                 dto.getDatePublished(),
                 dto.getDescription(),
                 dto.getRecipeCategory(),
-                dto.getAggregatedRating(),
+                aggregatedRating,  // 使用处理后的值
                 dto.getReviewCount(),
                 dto.getCalories(),
                 dto.getFatContent(),
@@ -516,8 +526,8 @@ public class RecipeServiceImpl implements RecipeService {
         if (cookTimeIso == null || prepTimeIso == null) {
             String sql = "SELECT CookTime, PrepTime FROM recipes WHERE RecipeId = ?";
             Map<String, Object> result = jdbcTemplate.queryForMap(sql, recipeId);
-            originalCookTime = (String) result.get("CookTime");
-            originalPrepTime = (String) result.get("PrepTime");
+            originalCookTime = (String) result.get("cooktime");
+            originalPrepTime = (String) result.get("preptime");
         }
 
         // 5. 计算总时间

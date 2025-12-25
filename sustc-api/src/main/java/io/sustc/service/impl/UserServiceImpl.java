@@ -139,7 +139,7 @@ public class UserServiceImpl implements UserService {
 
 
     // 关注/取消关注：切换操作，已关注则取消，未关注则添加
-    // 操作成功后关注中返回 true，取消关注返回 false，操作失败返回 false
+    // 操作成功返回 true，操作失败抛出 SecurityException
     @Override
     public boolean follow(AuthInfo auth, long followeeId) {
         if (!isValidUser(auth)) {
@@ -153,22 +153,25 @@ public class UserServiceImpl implements UserService {
         String checkFolloweeSql = "SELECT COUNT(*) FROM users WHERE AuthorId = ? AND IsDeleted = false";
         Integer count = jdbcTemplate.queryForObject(checkFolloweeSql, Integer.class, followeeId);
         if (count == null || count == 0) {
-            // followeeId 不存在，根据新接口定义返回 false 而非抛异常
-            return false;
+            // followeeId 不存在，抛出 SecurityException
+            throw new SecurityException("follow");
         }
 
         String checkFollowSql = "SELECT COUNT(*) FROM user_follows WHERE FollowerId = ? AND FollowingId = ?";
         Integer followCount = jdbcTemplate.queryForObject(checkFollowSql, Integer.class, auth.getAuthorId(), followeeId);
 
         if (followCount != null && followCount > 0) {
+            // 已关注，执行取消关注
             jdbcTemplate.update("DELETE FROM user_follows WHERE FollowerId = ? AND FollowingId = ?",
                 auth.getAuthorId(), followeeId);
-            return false;
         } else {
+            // 未关注，执行关注
             jdbcTemplate.update("INSERT INTO user_follows (FollowerId, FollowingId) VALUES (?, ?)",
                 auth.getAuthorId(), followeeId);
-            return true;
         }
+
+        // 操作成功，返回 true
+        return true;
     }
 
 
@@ -176,6 +179,11 @@ public class UserServiceImpl implements UserService {
     @Override
     @Cacheable(value = "users", key = "#userId")
     public UserRecord getById(long userId) {
+        // 参数校验：userId必须大于0  //并不确定到底是不是返回null。由于接口并无明确定义。
+        if (userId <= 0) {
+            return null;
+        }
+
         try {
             String sql = "SELECT * FROM public.users WHERE AuthorId = ?";
             UserRecord user = jdbcTemplate.queryForObject(sql, (rs, rowNum) -> {
@@ -200,7 +208,6 @@ public class UserServiceImpl implements UserService {
             String followingSql = "SELECT FollowingId FROM user_follows WHERE FollowerId = ? ORDER BY FollowingId";
             List<Long> followingList = jdbcTemplate.queryForList(followingSql, Long.class, userId);
             user.setFollowingUsers(followingList == null ? new long[0] : followingList.stream().mapToLong(Long::longValue).toArray());
-
             return user;
         } catch (Exception e) {
             return null;
@@ -212,18 +219,6 @@ public class UserServiceImpl implements UserService {
     public void updateProfile(AuthInfo auth, String gender, Integer age) {
         if (!isValidUser(auth)) {
             throw new SecurityException("updateProfile");
-        }
-
-        if (!verifyPassword(auth)) {
-            throw new SecurityException("updateProfile");
-        }
-
-        if (gender != null && !gender.equals("Male") && !gender.equals("Female")) {
-            throw new IllegalArgumentException("updateProfile");
-        }
-
-        if (age != null && age <= 0) {
-            throw new IllegalArgumentException("updateProfile");
         }
 
         List<Object> params = new ArrayList<>();
@@ -259,18 +254,18 @@ public class UserServiceImpl implements UserService {
     @Override
     public PageResult<FeedItem> feed(AuthInfo auth, int page, int size, String category) {
         try {
-            log.debug("Feed request for authorId: {}, page: {}, size: {}, category: {}", 
-                     auth != null ? auth.getAuthorId() : "null", page, size, category);
-            
+//            log.debug("Feed request for authorId: {}, page: {}, size: {}, category: {}",
+//                     auth != null ? auth.getAuthorId() : "null", page, size, category);
+//
             if (!isValidUser(auth)) {
-                log.warn("Invalid user for feed: {}", auth != null ? auth.getAuthorId() : "null");
+//                log.warn("Invalid user for feed: {}", auth != null ? auth.getAuthorId() : "null");
                 throw new SecurityException("feed");
             }
 
             page = Math.max(1, page);
             size = Math.max(1, Math.min(200, size));
             
-            log.debug("Normalized page: {}, size: {}", page, size);
+//            log.debug("Normalized page: {}, size: {}", page, size);
 
         StringBuilder countSql = new StringBuilder(
             "SELECT COUNT(*) FROM recipes r " +

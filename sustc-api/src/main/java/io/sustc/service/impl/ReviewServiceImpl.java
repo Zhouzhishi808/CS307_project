@@ -58,10 +58,6 @@ public class ReviewServiceImpl implements ReviewService {
                 throw new IllegalArgumentException("Recipe does not exist");
             }
 
-            if (permissionUtils.hasUserReviewedRecipe(userId, recipeId)) {
-                throw new IllegalArgumentException("User has already reviewed this recipe");
-            }
-
             long newReviewId = permissionUtils.generateNewId("reviews", "ReviewId");
 
             Timestamp now = Timestamp.from(Instant.now());
@@ -555,42 +551,68 @@ public class ReviewServiceImpl implements ReviewService {
     @Override
     @Transactional
     public long unlikeReview(AuthInfo auth, long reviewId) {
-        log.debug("Starting unlikeReview for reviewId: {}, user: {}",
-                reviewId, auth != null ? auth.getAuthorId() : "null");
+        final String METHOD_NAME = "unlikeReview";
+        log.debug("[{}] Starting - reviewId: {}, user: {}",
+                METHOD_NAME, reviewId, auth != null ? auth.getAuthorId() : "null");
 
         try {
             // === 1. 参数验证 ===
-            if (auth == null) {
-                throw new IllegalArgumentException("Authentication info is required");
-            }
-
-            if (reviewId <= 0) {
-                throw new IllegalArgumentException("Invalid review ID");
-            }
+            validateUnlikeReviewParameters(auth, reviewId);
 
             // === 2. 用户认证 ===
             long userId = authenticateUser(auth);
 
-            // === 3. 验证评论存在性 ===
-            if (!permissionUtils.reviewExists(reviewId)) {
-                throw new IllegalArgumentException("Review does not exist");
-            }
+            // === 3. 业务规则验证 ===
+            validateUnlikeReviewBusinessRules(reviewId);
 
-            // === 4. 执行取消点赞（使用已有的工具方法） ===
+            // === 4. 执行取消点赞 ===
             long totalLikes = processUnlike(userId, reviewId);
 
-            // === 5. 记录日志 ===
-            log.info("User {} unliked review {}. Total likes: {}", userId, reviewId, totalLikes);
+            // === 5. 记录成功日志 ===
+            logSuccessfulUnlike(reviewId, userId, totalLikes);
 
+            log.debug("[{}] Completed successfully, total likes: {}", METHOD_NAME, totalLikes);
             return totalLikes;
 
         } catch (SecurityException | IllegalArgumentException e) {
-            log.warn("unlikeReview failed: {}", e.getMessage());
+            log.warn("[{}] Failed due to business rule violation: {}", METHOD_NAME, e.getMessage());
             throw e;
         } catch (Exception e) {
-            log.error("Unexpected error in unlikeReview: {}", e.getMessage(), e);
+            log.error("[{}] Failed unexpectedly: {}", METHOD_NAME, e.getMessage(), e);
             throw new RuntimeException("Failed to unlike review: " + e.getMessage(), e);
         }
+    }
+
+    // 辅助方法：验证取消点赞评论的参数
+    private void validateUnlikeReviewParameters(AuthInfo auth, long reviewId) {
+        if (auth == null) {
+            throw new IllegalArgumentException("Authentication info is required");
+        }
+
+        if (auth.getAuthorId() <= 0) {
+            throw new IllegalArgumentException("Invalid user ID");
+        }
+
+        if (auth.getPassword() == null || auth.getPassword().trim().isEmpty()) {
+            throw new IllegalArgumentException("Password is required for user validation");
+        }
+
+        if (reviewId <= 0) {
+            throw new IllegalArgumentException("Invalid review ID");
+        }
+    }
+
+    // 辅助方法：验证取消点赞评论的业务规则
+    private void validateUnlikeReviewBusinessRules(long reviewId) {
+        // 验证评论是否存在
+        if (!permissionUtils.reviewExists(reviewId)) {
+            throw new IllegalArgumentException("Review with ID " + reviewId + " does not exist");
+        }
+    }
+
+    // 辅助方法：记录成功的取消点赞操作
+    private void logSuccessfulUnlike(long reviewId, long userId, long totalLikes) {
+        log.info("User {} unliked review {}. Total likes: {}", userId, reviewId, totalLikes);
     }
 
     // 辅助方法：处理取消点赞的核心逻辑
@@ -626,8 +648,8 @@ public class ReviewServiceImpl implements ReviewService {
     @Override
     @Cacheable(value = "reviewLists", key = "#recipeId + '_' + #page + '_' + #size + '_' + #sort")
     public PageResult<ReviewRecord> listByRecipe(long recipeId, int page, int size, String sort) {
-        log.debug("Listing reviews for recipeId: {}, page: {}, size: {}, sort: {}",
-                recipeId, page, size, sort);
+//        log.debug("Listing reviews for recipeId: {}, page: {}, size: {}, sort: {}",
+//                recipeId, page, size, sort);
 
         try {
             // === 1. 参数验证 ===
@@ -679,8 +701,8 @@ public class ReviewServiceImpl implements ReviewService {
                     .total(total)
                     .build();
 
-            log.info("Found {} reviews for recipe {} (page {} of {})",
-                    total, recipeId, validPage, calculateTotalPages(total, validSize));
+//            log.info("Found {} reviews for recipe {} (page {} of {})",
+//                    total, recipeId, validPage, calculateTotalPages(total, validSize));
 
             return result;
 
