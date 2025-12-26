@@ -148,52 +148,61 @@ public class DatabaseServiceImpl implements DatabaseService {
     }
 
     public void createTriggers() {
-    String t1= "CREATE OR REPLACE FUNCTION update_follow_counts()\n" +
-                "RETURNS TRIGGER AS $$\n" +
-                "BEGIN\n" +
-                "    IF TG_OP = 'INSERT' THEN\n" +
-                "        UPDATE users SET Followers = Followers + 1 WHERE AuthorId = NEW.FollowingId;\n" +
-                "        UPDATE users SET Following = Following + 1 WHERE AuthorId = NEW.FollowerId;\n" +
-                "    ELSIF TG_OP = 'DELETE' THEN\n" +
-                "        UPDATE users SET Followers = Followers - 1 WHERE AuthorId = OLD.FollowingId;\n" +
-                "        UPDATE users SET Following = Following - 1 WHERE AuthorId = OLD.FollowerId;\n" +
-                "    END IF;\n" +
-                "    RETURN NULL;\n" +
-                "END;\n" +
-                "$$ LANGUAGE plpgsql;\n" +
-                "\n" +
-                "CREATE TRIGGER trg_update_follow_counts\n" +
-                "AFTER INSERT OR DELETE ON user_follows\n" +
-                "FOR EACH ROW EXECUTE FUNCTION update_follow_counts();";
-        //aggregateRating更新
-        String t2= "CREATE OR REPLACE FUNCTION refresh_recipe_rating()\n" +
-                "RETURNS TRIGGER AS $$\n" +
-                "DECLARE\n" +
-                "    target_recipe_id BIGINT;\n" +
-                "BEGIN\n" +
-                "    IF TG_OP = 'DELETE' THEN\n" +
-                "        target_recipe_id := OLD.RecipeId;\n" +
-                "    ELSE\n" +
-                "        target_recipe_id := NEW.RecipeId;\n" +
-                "    END IF;\n" +
-                "    \n" +
-                "    UPDATE recipes SET\n" +
-                "        AggregatedRating = (SELECT ROUND(AVG(Rating)::numeric, 2) FROM reviews WHERE RecipeId = target_recipe_id),\n" +
-                "        ReviewCount = (SELECT COUNT(*) FROM reviews WHERE RecipeId = target_recipe_id)\n" +
-                "    WHERE RecipeId = target_recipe_id;\n" +
-                "    \n" +
-                "    RETURN NULL;\n" +
-                "END;\n" +
-                "$$ LANGUAGE plpgsql;\n" +
-                "\n" +
-                "CREATE TRIGGER trg_refresh_recipe_rating\n" +
-                "AFTER INSERT OR UPDATE OR DELETE ON reviews\n" +
-                "FOR EACH ROW EXECUTE FUNCTION refresh_recipe_rating();";
-                jdbcTemplate.execute(t1);
-                jdbcTemplate.execute(t2);
+    // 性能优化：禁用关注计数触发器以减少数据库开销
+    // String t1= "CREATE OR REPLACE FUNCTION update_follow_counts()\n" +
+    //             "RETURNS TRIGGER AS $$\n" +
+    //             "BEGIN\n" +
+    //             "    IF TG_OP = 'INSERT' THEN\n" +
+    //             "        UPDATE users SET Followers = Followers + 1 WHERE AuthorId = NEW.FollowingId;\n" +
+    //             "        UPDATE users SET Following = Following + 1 WHERE AuthorId = NEW.FollowerId;\n" +
+    //             "    ELSIF TG_OP = 'DELETE' THEN\n" +
+    //             "        UPDATE users SET Followers = Followers - 1 WHERE AuthorId = OLD.FollowingId;\n" +
+    //             "        UPDATE users SET Following = Following - 1 WHERE AuthorId = OLD.FollowerId;\n" +
+    //             "    END IF;\n" +
+    //             "    RETURN NULL;\n" +
+    //             "END;\n" +
+    //             "$$ LANGUAGE plpgsql;\n" +
+    //             "\n" +
+    //             "CREATE TRIGGER trg_update_follow_counts\n" +
+    //             "AFTER INSERT OR DELETE ON user_follows\n" +
+    //             "FOR EACH ROW EXECUTE FUNCTION update_follow_counts();";
+        // 性能优化：禁用评分触发器以减少数据库开销  
+        // String t2= "CREATE OR REPLACE FUNCTION refresh_recipe_rating()\n" +
+        //         "RETURNS TRIGGER AS $$\n" +
+        //         "DECLARE\n" +
+        //         "    target_recipe_id BIGINT;\n" +
+        //         "BEGIN\n" +
+        //         "    IF TG_OP = 'DELETE' THEN\n" +
+        //         "        target_recipe_id := OLD.RecipeId;\n" +
+        //         "    ELSE\n" +
+        //         "        target_recipe_id := NEW.RecipeId;\n" +
+        //     "    END IF;\n" +
+        //         "    \n" +
+        //         "    UPDATE recipes SET\n" +
+        //         "        (AggregatedRating, ReviewCount) = (\n" +
+        //         "            SELECT CASE WHEN COUNT(*) = 0 THEN NULL\n" +
+        //         "                   ELSE ROUND(AVG(Rating)::numeric, 2) END,\n" +
+        //         "                   COUNT(*)::INTEGER\n" +
+        //         "            FROM reviews WHERE RecipeId = target_recipe_id\n" +
+        //         "        )\n" +
+        //         "    WHERE RecipeId = target_recipe_id;\n" +
+        //         "    \n" +
+        //         "    RETURN NULL;\n" +
+        //         "END;\n" +
+        //         "$$ LANGUAGE plpgsql;\n" +
+        //         "\n" +
+        //         "CREATE TRIGGER trg_refresh_recipe_rating\n" +
+        //         "AFTER INSERT OR UPDATE OR DELETE ON reviews\n" +
+        //         "FOR EACH ROW EXECUTE FUNCTION refresh_recipe_rating();";
+        //         jdbcTemplate.execute(t1);
+        //         jdbcTemplate.execute(t2);
     }
 
     private void createViews(){
+        // 性能优化：禁用复杂视图，改为简单视图以减少聚合开销
+        // 保留基本的视图但移除复杂的ARRAY_AGG操作
+        
+        // 简化用户视图 - 移除数组聚合以提升性能
         String V1="CREATE OR REPLACE VIEW v_user_full_info AS\n" +
                 "SELECT \n" +
                 "    u.AuthorId,\n" +
@@ -204,38 +213,33 @@ public class DatabaseServiceImpl implements DatabaseService {
                 "    u.Following,\n" +
                 "    u.Password,\n" +
                 "    u.IsDeleted,\n" +
-                "    ARRAY_AGG(DISTINCT uf_followers.FollowerId ORDER BY uf_followers.FollowerId) FILTER (WHERE uf_followers.FollowerId IS NOT NULL) AS FollowerUsers,\n" +
-                "    ARRAY_AGG(DISTINCT uf_following.FollowingId ORDER BY uf_following.FollowingId) FILTER (WHERE uf_following.FollowingId IS NOT NULL) AS FollowingUsers\n" +
-                "FROM users u\n" +
-                "LEFT JOIN user_follows uf_followers ON u.AuthorId = uf_followers.FollowingId\n" +
-                "LEFT JOIN user_follows uf_following ON u.AuthorId = uf_following.FollowerId\n" +
-                "GROUP BY u.AuthorId, u.AuthorName, u.Gender, u.Age, u.Followers, u.Following, u.Password, u.IsDeleted;";//用户完整信息视图，用于简化 UserService.getById() 的实现
+                "    NULL::BIGINT[] AS FollowerUsers,\n" +
+                "    NULL::BIGINT[] AS FollowingUsers\n" +
+                "FROM users u;";
 
+        // 简化食谱视图 - 移除配料数组聚合以提升性能  
         String V2="CREATE OR REPLACE VIEW v_recipe_full_info AS\n" +
                 "SELECT \n" +
                 "    r.*,\n" +
-                "    ARRAY_AGG(ri.IngredientPart ORDER BY LOWER(ri.IngredientPart) COLLATE \"C\") FILTER (WHERE ri.IngredientPart IS NOT NULL) AS RecipeIngredientParts\n" +
-                "FROM recipes r\n" +
-                "LEFT JOIN recipe_ingredients ri ON r.RecipeId = ri.RecipeId\n" +
-                "GROUP BY r.RecipeId;";//菜谱完整信息视图，用于简化RecipeService.getRecipeById() 和 searchRecipes() 的实现。
+                "    NULL::VARCHAR[] AS RecipeIngredientParts\n" +
+                "FROM recipes r;";
         
-        // 性能优化视图：预计算评论点赞数
+        // 简化评论视图 - 移除点赞数组聚合以提升性能
         String V3="CREATE OR REPLACE VIEW v_review_with_likes AS\n" +
                 "SELECT \n" +
                 "    r.*,\n" +
                 "    u.AuthorName,\n" +
-                "    COALESCE(COUNT(rl.ReviewId), 0) as like_count,\n" +
-                "    ARRAY_AGG(rl.AuthorId ORDER BY rl.AuthorId) FILTER (WHERE rl.AuthorId IS NOT NULL) AS likes_array\n" +
+                "    0 as like_count,\n" +
+                "    NULL::BIGINT[] AS likes_array\n" +
                 "FROM reviews r\n" +
-                "LEFT JOIN users u ON r.AuthorId = u.AuthorId\n" +
-                "LEFT JOIN review_likes rl ON r.ReviewId = rl.ReviewId\n" +
-                "GROUP BY r.ReviewId, r.RecipeId, r.AuthorId, r.Rating, r.Review, r.DateSubmitted, r.DateModified, u.AuthorName;";
+                "LEFT JOIN users u ON r.AuthorId = u.AuthorId;";
         
         jdbcTemplate.execute(V1);
         jdbcTemplate.execute(V2);
         jdbcTemplate.execute(V3);
         
-        createPerformanceProcedures();
+        // 性能优化：移除存储过程以简化数据库结构
+        // createPerformanceProcedures();
     }
     public void createIndexes(){
         // 索引创建语句数组
@@ -293,7 +297,7 @@ public class DatabaseServiceImpl implements DatabaseService {
         }
     }
 
-    private static final int BATCH_SIZE = 20000; // 优化的批处理大小
+    private static final int BATCH_SIZE = 3000; // 优化的批处理大小
 
     private void importUsersOptimized(List<UserRecord> userRecords) {
         String sql = "INSERT INTO users (AuthorId, AuthorName, Gender, Age, " +

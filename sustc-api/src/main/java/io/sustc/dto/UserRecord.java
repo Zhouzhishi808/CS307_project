@@ -64,4 +64,18 @@ public class UserRecord implements Serializable {
      */
     private boolean isDeleted;
 
+    @Override
+    public String toString() {
+        return "UserRecord{" +
+                "authorId=" + authorId +
+                ", authorName='" + authorName + '\'' +
+                ", gender='" + gender + '\'' +
+                ", age=" + age +
+                ", followers=" + followers +
+                ", following=" + following +
+                ", followerUsersCount=" + (followerUsers != null ? followerUsers.length : 0) +
+                ", followingUsersCount=" + (followingUsers != null ? followingUsers.length : 0) +
+                ", isDeleted=" + isDeleted +
+                '}';
+    }
 }

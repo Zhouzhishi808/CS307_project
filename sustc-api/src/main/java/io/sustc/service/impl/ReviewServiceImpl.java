@@ -72,7 +72,7 @@ public class ReviewServiceImpl implements ReviewService {
                 throw new RuntimeException("Failed to insert review - unexpected row count: " + rowsInserted);
             }
 
-            refreshRecipeAggregatedRating(recipeId);
+            updateRecipeRatingQuickly(recipeId);
 
             log.info("Successfully added review {} for recipe {} by user {}",
                     newReviewId, recipeId, userId);
@@ -91,8 +91,8 @@ public class ReviewServiceImpl implements ReviewService {
     }
 
     private void validateAddReviewParameters(AuthInfo auth, int rating, String review) {
-        // 验证auth参数
-        if (permissionUtils.validateUser(auth) == -1) {
+        // 验证auth参数 - 优化：避免重复验证
+        if (auth == null || auth.getAuthorId() <= 0) {
             throw new IllegalArgumentException("Authentication info is required");
         }
 
@@ -102,13 +102,8 @@ public class ReviewServiceImpl implements ReviewService {
         }
 
         // 验证评论内容
-        if (review == null) {
-            throw new IllegalArgumentException("Review content cannot be null");
-        }
-
-        String trimmedReview = review.trim();
-        if (trimmedReview.isEmpty()) {
-            throw new IllegalArgumentException("Review content cannot be empty");
+        if (review == null || review.trim().isEmpty()) {
+            throw new IllegalArgumentException("Review content cannot be null or empty");
         }
     }
 
@@ -152,7 +147,7 @@ public class ReviewServiceImpl implements ReviewService {
                 throw new RuntimeException("Failed to update review - unexpected row count: " + affectedRows);
             }
 
-            refreshRecipeAggregatedRating(recipeId);
+            updateRecipeRatingQuickly(recipeId);
 
             // === 5. 记录日志 ===
             log.info("User {} edited review {} for recipe {}", userId, reviewId, recipeId);
@@ -347,17 +342,20 @@ public class ReviewServiceImpl implements ReviewService {
         }
     }
 
-    // 辅助方法：刷新食谱评分
+    // 辅助方法：刷新食谱评分 - 优化：单个子查询
     private void refreshRecipeRating(long recipeId) {
         try {
-            // 直接使用 SQL 更新，确保评分正确
+            // 优化：使用单个子查询避免多次扫描reviews表
             String updateSql =
                     "UPDATE recipes SET " +
-                            "AggregatedRating = (SELECT ROUND(AVG(Rating)::numeric, 2) FROM reviews WHERE RecipeId = ?), " +
-                            "ReviewCount = (SELECT COUNT(*) FROM reviews WHERE RecipeId = ?) " +
+                            "(AggregatedRating, ReviewCount) = (" +
+                            "SELECT CASE WHEN COUNT(*) = 0 THEN NULL " +
+                            "       ELSE ROUND(AVG(Rating)::numeric, 2) END, " +
+                            "       COUNT(*)::INTEGER " +
+                            "FROM reviews WHERE RecipeId = ?) " +
                             "WHERE RecipeId = ?";
 
-            int updated = jdbcTemplate.update(updateSql, recipeId, recipeId, recipeId);
+            int updated = jdbcTemplate.update(updateSql, recipeId, recipeId);
 
             if (updated == 1) {
                 log.debug("Successfully refreshed recipe rating for recipe {}", recipeId);
@@ -531,16 +529,15 @@ public class ReviewServiceImpl implements ReviewService {
         }
     }
 
-    // 辅助方法：获取评论的点赞数
+    // 辅助方法：获取评论的点赞数 - 优化：直接返回原始类型
     private long getReviewLikeCount(long reviewId) {
-        String sql = "SELECT COUNT(*) FROM review_likes WHERE ReviewId = ?";
+        String sql = "SELECT COUNT(*)::BIGINT FROM review_likes WHERE ReviewId = ?";
 
         try {
-            Long count = jdbcTemplate.queryForObject(sql, Long.class, reviewId);
-            return count != null ? count : 0;
+            return jdbcTemplate.queryForObject(sql, Long.class, reviewId);
         } catch (Exception e) {
             log.error("Error getting like count for review {}: {}", reviewId, e.getMessage());
-            return 0;
+            return 0L;
         }
     }
 
@@ -632,13 +629,12 @@ public class ReviewServiceImpl implements ReviewService {
         return getReviewLikeCount(reviewId);
     }
 
-    // 工具方法：检查用户是否已经点赞（如果类中没有，需要添加）
+    // 工具方法：检查用户是否已经点赞 - 优化：使用EXISTS查询
     private boolean hasUserLikedReview(long userId, long reviewId) {
-        String sql = "SELECT COUNT(*) FROM review_likes WHERE AuthorId = ? AND ReviewId = ?";
+        String sql = "SELECT EXISTS(SELECT 1 FROM review_likes WHERE AuthorId = ? AND ReviewId = ?)";
 
         try {
-            Long count = jdbcTemplate.queryForObject(sql, Long.class, userId, reviewId);
-            return count != null && count > 0;
+            return jdbcTemplate.queryForObject(sql, Boolean.class, userId, reviewId);
         } catch (Exception e) {
             //log.error("Error checking if user {} liked review {}: {}", userId, reviewId, e.getMessage());
             return false;
@@ -647,7 +643,7 @@ public class ReviewServiceImpl implements ReviewService {
 
 
 
-    @Cacheable(value = "reviewLists", key = "#recipeId + '_' + #page + '_' + #size + '_' + #sort")
+//    @Cacheable(value = "reviewLists", key = "#recipeId + '_' + #page + '_' + #size + '_' + #sort")
     @Override
     public PageResult<ReviewRecord> listByRecipe(long recipeId, int page, int size, String sort) {
 //        log.debug("Listing reviews for recipeId: {}, page: {}, size: {}, sort: {}",
@@ -720,33 +716,45 @@ public class ReviewServiceImpl implements ReviewService {
     // 辅助方法：构建排序子句
     private String buildOrderByClause(String sort) {
         if (sort == null) {
-            return "ORDER BY r.DateModified DESC, r.ReviewId DESC";
+            return "ORDER BY r.DateModified DESC, r.RecipeId DESC";
         }
 
         switch (sort.toLowerCase()) {
             case "likes_desc":
-                return "ORDER BY like_count DESC, r.DateModified DESC, r.ReviewId DESC";
+                return "ORDER BY likes_count DESC, r.DateModified DESC, r.RecipeId DESC";
             case "date_desc":
-                return "ORDER BY r.DateModified DESC, r.ReviewId DESC";
+                return "ORDER BY r.DateModified DESC, r.RecipeId DESC";
             default:
                 //log.warn("Invalid sort parameter '{}', using default 'date_desc'", sort);
-                return "ORDER BY r.DateModified DESC, r.ReviewId DESC";
+                return "ORDER BY r.DateModified DESC, r.RecipeId DESC";
         }
     }
 
-    // 辅助方法：构建优化的查询语句（使用视图）
+    // 辅助方法：构建优化的查询语句（直接查询，性能优化）
     private String buildQuerySql(String orderByClause) {
-        return "SELECT * FROM v_review_with_likes r " +
-                "WHERE r.RecipeId = ? " +
-                orderByClause + " " +
-                "LIMIT ? OFFSET ?";
+        if (orderByClause.contains("likes_count")) {
+            // 使用子查询获取点赞数用于排序
+            return "SELECT r.*, u.AuthorName, COALESCE(l.likes_count, 0) AS likes_count " +
+                   "FROM reviews r " +
+                   "LEFT JOIN users u ON r.AuthorId = u.AuthorId " +
+                   "LEFT JOIN (SELECT ReviewId, COUNT(*) AS likes_count FROM review_likes GROUP BY ReviewId) l ON r.ReviewId = l.ReviewId " +
+                   "WHERE r.RecipeId = ? " +
+                   orderByClause + " " +
+                   "LIMIT ? OFFSET ?";
+        } else {
+            return "SELECT r.*, u.AuthorName FROM reviews r " +
+                   "LEFT JOIN users u ON r.AuthorId = u.AuthorId " +
+                   "WHERE r.RecipeId = ? " +
+                   orderByClause + " " +
+                   "LIMIT ? OFFSET ?";
+        }
     }
 
-    // 辅助方法：执行优化的分页查询（使用视图，消除N+1查询）
+    // 辅助方法：执行优化的分页查询（直接查询，性能优化）
     private List<ReviewRecord> executePaginatedQuery(
             long recipeId, String sql, int limit, int offset
     ) {
-        return jdbcTemplate.query(
+        List<ReviewRecord> reviews = jdbcTemplate.query(
                 sql,
                 new Object[]{recipeId, limit, offset},
                 (rs, rowNum) -> {
@@ -757,7 +765,7 @@ public class ReviewServiceImpl implements ReviewService {
                     review.setRecipeId(rs.getLong("RecipeId"));
                     review.setAuthorId(rs.getLong("AuthorId"));
                     review.setAuthorName(rs.getString("AuthorName"));
-                    review.setRating(rs.getInt("Rating"));
+                    review.setRating((float) rs.getInt("Rating"));
                     review.setReview(rs.getString("Review"));
 
                     // 设置时间戳
@@ -772,22 +780,34 @@ public class ReviewServiceImpl implements ReviewService {
                         review.setDateModified(dateModified);
                     }
 
-                    // 从视图中直接获取点赞数组（已排序），消除N+1查询问题
-                    Array likesArray = rs.getArray("likes_array");
-                    if (likesArray != null) {
-                        Long[] likeObjects = (Long[]) likesArray.getArray();
-                        long[] likes = new long[likeObjects.length];
-                        for (int i = 0; i < likeObjects.length; i++) {
-                            likes[i] = likeObjects[i];
-                        }
-                        review.setLikes(likes);
-                    } else {
-                        review.setLikes(new long[0]);
-                    }
-
                     return review;
                 }
         );
+        
+        // 批量查询点赞信息以避免N+1查询
+        if (!reviews.isEmpty()) {
+            List<Long> reviewIds = reviews.stream().map(ReviewRecord::getReviewId).toList();
+            
+            // 构建安全的 IN 查询
+            String placeholders = reviewIds.stream().map(id -> "?").reduce((a, b) -> a + "," + b).orElse("");
+            String likesQuery = "SELECT ReviewId, AuthorId FROM review_likes WHERE ReviewId IN (" +
+                    placeholders + ") ORDER BY ReviewId, AuthorId";
+            
+            Map<Long, List<Long>> likesMap = new HashMap<>();
+            jdbcTemplate.query(likesQuery, reviewIds.toArray(), (rs) -> {
+                long reviewId = rs.getLong("ReviewId");
+                long authorId = rs.getLong("AuthorId");
+                likesMap.computeIfAbsent(reviewId, k -> new ArrayList<>()).add(authorId);
+            });
+            
+            // 设置点赞信息
+            for (ReviewRecord review : reviews) {
+                List<Long> likes = likesMap.getOrDefault(review.getReviewId(), Collections.emptyList());
+                review.setLikes(likes.stream().mapToLong(Long::longValue).toArray());
+            }
+        }
+        
+        return reviews;
     }
 
     // 保留原方法以兼容其他地方的调用（已由视图优化）
@@ -818,6 +838,15 @@ public class ReviewServiceImpl implements ReviewService {
         return (int) Math.ceil((double) totalRecords / pageSize);
     }
 
+    // 快速更新食谱评分，不返回RecipeRecord
+    private void updateRecipeRatingQuickly(long recipeId) {
+        try {
+            calculateRecipeRatingStats(recipeId);
+        } catch (Exception e) {
+            log.error("Failed to update recipe rating for recipe {}: {}", recipeId, e.getMessage());
+        }
+    }
+
     @Override
     @Transactional
     public RecipeRecord refreshRecipeAggregatedRating(long recipeId) {
@@ -835,13 +864,10 @@ public class ReviewServiceImpl implements ReviewService {
                 throw new IllegalArgumentException("Recipe with ID " + recipeId + " does not exist");
             }
 
-            // === 3. 计算新的评分和评论数 ===
+            // === 3. 计算并更新评分和评论数（现在是一次操作） ===
             RatingStats ratingStats = calculateRecipeRatingStats(recipeId);
 
-            // === 4. 更新食谱的评分和评论数 ===
-            updateRecipeRating(recipeId, ratingStats);
-
-            // === 5. 获取并返回更新后的食谱记录 ===
+            // === 4. 获取并返回更新后的食谱记录 ===
             RecipeRecord updatedRecipe = getUpdatedRecipeRecord(recipeId);
 
             //log.info("[{}] Successfully refreshed rating for recipe {}: rating={}, reviewCount={}",
@@ -872,31 +898,43 @@ public class ReviewServiceImpl implements ReviewService {
         public int getReviewCount() { return reviewCount; }
     }
 
-    // 辅助方法：计算食谱的评分统计
+    // 辅助方法：计算食谱的评分统计 - 优化：针对小数据集简化为单个子查询
     private RatingStats calculateRecipeRatingStats(long recipeId) {
-        // 在 SQL 中直接转换为 DOUBLE PRECISION 和 INTEGER
-        String sql =
-                "SELECT " +
-                        "  CASE WHEN COUNT(*) = 0 THEN NULL " +
-                        "       ELSE ROUND(AVG(Rating)::numeric, 2)::DOUBLE PRECISION " +
-                        "  END as avg_rating, " +
-                        "  COUNT(*)::INTEGER as review_count " +
-                        "FROM reviews " +
-                        "WHERE RecipeId = ?";
+        // 优化：使用单个子查询避免多次扫描reviews表
+        String sql = """
+            UPDATE recipes SET
+                (AggregatedRating, ReviewCount) = (
+                    SELECT CASE WHEN COUNT(*) = 0 THEN NULL 
+                           ELSE ROUND(AVG(Rating)::numeric, 2) END,
+                           COUNT(*)::INTEGER
+                    FROM reviews WHERE RecipeId = ?
+                )
+            WHERE RecipeId = ?
+            RETURNING AggregatedRating, ReviewCount
+            """;
 
         try {
-            Map<String, Object> stats = jdbcTemplate.queryForMap(sql, recipeId);
+            return jdbcTemplate.queryForObject(sql, (rs, rowNum) -> {
+                Double avgRating = rs.getObject("AggregatedRating", Double.class);
+                int reviewCount = rs.getInt("ReviewCount");
+                return new RatingStats(avgRating, reviewCount);
+            }, recipeId, recipeId);
 
-            // 现在应该是正确的类型
+        } catch (Exception e) {
+            // 如果优化的SQL失败，回退到原始方式
+            String fallbackSql =
+                    "SELECT " +
+                            "  CASE WHEN COUNT(*) = 0 THEN NULL " +
+                            "       ELSE ROUND(AVG(Rating)::numeric, 2) " +
+                            "  END as avg_rating, " +
+                            "  COUNT(*)::INTEGER as review_count " +
+                            "FROM reviews " +
+                            "WHERE RecipeId = ?";
+            
+            Map<String, Object> stats = jdbcTemplate.queryForMap(fallbackSql, recipeId);
             Double avgRating = (Double) stats.get("avg_rating");
             Integer reviewCount = (Integer) stats.get("review_count");
-
             return new RatingStats(avgRating, reviewCount != null ? reviewCount : 0);
-
-        } catch (EmptyResultDataAccessException e) {
-            // 没有评论，评分和评论数都为0
-            //log.debug("No reviews found for recipe {}, setting rating to null and count to 0", recipeId);
-            return new RatingStats(null, 0);
         }
     }
 

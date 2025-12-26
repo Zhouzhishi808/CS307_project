@@ -181,6 +181,59 @@ public class RecipeServiceImpl implements RecipeService {
         }
     }
 
+    // 批量获取食材，解决N+1查询问题
+    private void batchLoadIngredients(List<RecipeRecord> recipes) {
+        if (recipes.isEmpty()) {
+            return;
+        }
+
+        // 收集所有RecipeId
+        List<Long> recipeIds = new ArrayList<>();
+        for (RecipeRecord recipe : recipes) {
+            recipeIds.add(recipe.getRecipeId());
+        }
+
+        // 一次查询获取所有食材
+        StringBuilder inClause = new StringBuilder();
+        for (int i = 0; i < recipeIds.size(); i++) {
+            if (i > 0) inClause.append(",");
+            inClause.append("?");
+        }
+        
+        String sql = "SELECT RecipeId, IngredientPart FROM recipe_ingredients " +
+                    "WHERE RecipeId IN (" + inClause + ") " +
+                    "ORDER BY RecipeId, LOWER(IngredientPart) COLLATE \"C\"";
+
+        // 使用Map按RecipeId分组食材
+        Map<Long, List<String>> ingredientsMap = new HashMap<>();
+        for (Long recipeId : recipeIds) {
+            ingredientsMap.put(recipeId, new ArrayList<>());
+        }
+
+        try {
+            jdbcTemplate.query(sql, recipeIds.toArray(), (rs, rowNum) -> {
+                long recipeId = rs.getLong("RecipeId");
+                String ingredient = rs.getString("IngredientPart");
+                if (ingredient != null) {
+                    ingredientsMap.get(recipeId).add(ingredient);
+                }
+                return null;
+            });
+
+            // 设置食材到对应的食谱
+            for (RecipeRecord recipe : recipes) {
+                List<String> ingredients = ingredientsMap.get(recipe.getRecipeId());
+                recipe.setRecipeIngredientParts(ingredients.toArray(new String[0]));
+            }
+        } catch (Exception e) {
+            log.debug("Error batch loading ingredients: {}", e.getMessage());
+            // 如果批量查询失败，回退到单独查询
+            for (RecipeRecord recipe : recipes) {
+                recipe.setRecipeIngredientParts(getRecipeIngredientsArray(recipe.getRecipeId()));
+            }
+        }
+    }
+
     @Override
     public PageResult<RecipeRecord> searchRecipes(String keyword, String category, Double minRating, Integer page, Integer size, String sort) {
         // 验证分页参数
@@ -242,15 +295,20 @@ public class RecipeServiceImpl implements RecipeService {
         queryParams.add(validSize);
         queryParams.add((validPage - 1) * validSize);
 
-        // 执行查询 - 简单高效查询，适合小数据集
+        // 执行查询 - 使用批量获取食材，避免N+1查询问题
         String querySQL = "SELECT r.*, u.AuthorName FROM recipes r " +
                 "LEFT JOIN users u ON r.AuthorId = u.AuthorId " +
                 whereClause.toString() +
                 " " + orderByClause + " LIMIT ? OFFSET ?";
         
         List<RecipeRecord> recipes = jdbcTemplate.query(querySQL, queryParams.toArray(), (rs, rowNum) ->
-            mapResultSetToRecipeRecord(rs, true)  // 使用标准映射方法
+            mapResultSetToRecipeRecord(rs, false)  // 先不查询食材
         );
+
+        // 批量获取所有食材，解决N+1查询问题
+        if (!recipes.isEmpty()) {
+            batchLoadIngredients(recipes);
+        }
 
         return PageResult.<RecipeRecord>builder()
                 .items(recipes)
@@ -320,19 +378,9 @@ public class RecipeServiceImpl implements RecipeService {
         return newRecipeId;
     }
 
-    // 辅助方法：验证用户权限
+    // 辅助方法：验证用户权限 - 使用缓存的权限工具
     private boolean validateAuthAndPermission(AuthInfo auth) {
-        if (auth == null || auth.getAuthorId() <= 0) {
-            return false;
-        }
-
-        String sql = "SELECT COUNT(*) FROM users WHERE AuthorId = ? AND IsDeleted = false";
-        try {
-            Integer count = jdbcTemplate.queryForObject(sql, Integer.class, auth.getAuthorId());
-            return count != null && count > 0;
-        } catch (EmptyResultDataAccessException e) {
-            return false;
-        }
+        return permissionUtils.validateUser(auth) > 0;
     }
 
     // 辅助方法：验证食谱数据
@@ -628,13 +676,15 @@ public class RecipeServiceImpl implements RecipeService {
 
     @Override
     public Map<String, Object> getClosestCaloriePair() {
+        // 针对小数据集优化：添加索引提示并简化查询
         String sql = """
             SELECT r1.RecipeId AS RecipeA, r2.RecipeId AS RecipeB,
                    r1.Calories AS CaloriesA, r2.Calories AS CaloriesB,
                    ABS(r1.Calories - r2.Calories) AS Difference
             FROM recipes r1
-            JOIN recipes r2 ON r1.RecipeId < r2.RecipeId
-            WHERE r1.Calories IS NOT NULL AND r2.Calories IS NOT NULL
+            JOIN recipes r2 ON r1.RecipeId < r2.RecipeId 
+                AND r2.Calories IS NOT NULL
+            WHERE r1.Calories IS NOT NULL
             ORDER BY Difference ASC, r1.RecipeId ASC, r2.RecipeId ASC
             LIMIT 1
             """;

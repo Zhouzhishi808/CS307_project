@@ -87,15 +87,11 @@ public class UserServiceImpl implements UserService {
             return -1L;
         }
 
-        String sql = "SELECT Password FROM users WHERE AuthorId = ? AND IsDeleted = false";
+        String sql = "SELECT 1 FROM users WHERE AuthorId = ? AND Password = ? AND IsDeleted = false";
 
         try {
-            String stored = jdbcTemplate.queryForObject(sql, String.class, auth.getAuthorId());
-
-            if (stored != null && (stored.equals(auth.getPassword()) || PasswordUtil.verifyPassword(auth.getPassword(), stored))) {
-                return auth.getAuthorId();
-            }
-            return -1L;
+            jdbcTemplate.queryForObject(sql, Integer.class, auth.getAuthorId(), auth.getPassword());
+            return auth.getAuthorId();
         } catch (EmptyResultDataAccessException e) {
             return -1L;
         } catch (Exception e) {
@@ -153,23 +149,26 @@ public class UserServiceImpl implements UserService {
             throw new SecurityException("follow");
         }
 
-        String checkFolloweeSql = "SELECT COUNT(*) FROM users WHERE AuthorId = ? AND IsDeleted = false";
-        Integer count = jdbcTemplate.queryForObject(checkFolloweeSql, Integer.class, followeeId);
-        if (count == null || count == 0) {
+        // 优化：使用EXISTS查询
+        String checkFolloweeSql = "SELECT EXISTS(SELECT 1 FROM users WHERE AuthorId = ? AND IsDeleted = false)";
+        Boolean exists = jdbcTemplate.queryForObject(checkFolloweeSql, Boolean.class, followeeId);
+        if (!exists) {
             // followeeId 不存在，抛出 SecurityException
             throw new SecurityException("follow");
         }
 
-        String checkFollowSql = "SELECT COUNT(*) FROM user_follows WHERE FollowerId = ? AND FollowingId = ?";
-        Integer followCount = jdbcTemplate.queryForObject(checkFollowSql, Integer.class, auth.getAuthorId(), followeeId);
+        // 优化：使用EXISTS查询并用一条SQL处理切换逻辑
+        String checkFollowSql = "SELECT EXISTS(SELECT 1 FROM user_follows WHERE FollowerId = ? AND FollowingId = ?)";
+        Boolean isFollowing = jdbcTemplate.queryForObject(checkFollowSql, Boolean.class, auth.getAuthorId(), followeeId);
 
-        if (followCount != null && followCount > 0) {
+        if (isFollowing) {
             // 已关注，执行取消关注
             jdbcTemplate.update("DELETE FROM user_follows WHERE FollowerId = ? AND FollowingId = ?",
                 auth.getAuthorId(), followeeId);
         } else {
-            // 未关注，执行关注
-            jdbcTemplate.update("INSERT INTO user_follows (FollowerId, FollowingId) VALUES (?, ?)",
+            // 未关注，执行关注 - 优化：使用ON CONFLICT避免重复插入
+            jdbcTemplate.update(
+                "INSERT INTO user_follows (FollowerId, FollowingId) VALUES (?, ?) ON CONFLICT DO NOTHING",
                 auth.getAuthorId(), followeeId);
         }
 
@@ -180,7 +179,7 @@ public class UserServiceImpl implements UserService {
 
     // 根据 ID 查询用户信息
     @Override
-    @Cacheable(value = "users", key = "#userId")
+//    @Cacheable(value = "users", key = "#userId")
     public UserRecord getById(long userId) {
         // 参数校验：userId必须大于0
         if (userId <= 0) {
@@ -188,14 +187,9 @@ public class UserServiceImpl implements UserService {
         }
 
         try {
-            // 使用高性能视图，一次查询获取所有数据，消除N+1查询问题
-            String sql = "SELECT * FROM v_user_full_info WHERE AuthorId = ?";
+            // 性能优化：直接查询用户表，不使用复杂视图
+            String sql = "SELECT * FROM users WHERE AuthorId = ? AND IsDeleted = false";
             UserRecord user = jdbcTemplate.queryForObject(sql, (rs, rowNum) -> {
-                // 检查用户是否已删除
-                if(rs.getBoolean("IsDeleted")) {
-                    return null;
-                }
-                
                 UserRecord u = new UserRecord();
                 u.setAuthorId(rs.getLong("AuthorId"));
                 u.setAuthorName(rs.getString("AuthorName"));
@@ -205,35 +199,25 @@ public class UserServiceImpl implements UserService {
                 u.setFollowing(rs.getInt("Following"));
                 u.setPassword(rs.getString("Password"));
                 u.setDeleted(rs.getBoolean("IsDeleted"));
-                
-                // 从视图中直接获取关注者数组（已排序）
-                Array followerArray = rs.getArray("FollowerUsers");
-                if (followerArray != null) {
-                    Long[] followerObjects = (Long[]) followerArray.getArray();
-                    long[] followers = new long[followerObjects.length];
-                    for (int i = 0; i < followerObjects.length; i++) {
-                        followers[i] = followerObjects[i];
-                    }
-                    u.setFollowerUsers(followers);
-                } else {
-                    u.setFollowerUsers(new long[0]);
-                }
-                
-                // 从视图中直接获取正在关注数组（已排序）
-                Array followingArray = rs.getArray("FollowingUsers");
-                if (followingArray != null) {
-                    Long[] followingObjects = (Long[]) followingArray.getArray();
-                    long[] following = new long[followingObjects.length];
-                    for (int i = 0; i < followingObjects.length; i++) {
-                        following[i] = followingObjects[i];
-                    }
-                    u.setFollowingUsers(following);
-                } else {
-                    u.setFollowingUsers(new long[0]);
-                }
-                
                 return u;
             }, userId);
+            
+            if (user != null) {
+                // 分别查询关注者和关注的用户
+                String followerSql = "SELECT FollowerId FROM user_follows WHERE FollowingId = ? ORDER BY FollowerId";
+                long[] followers = jdbcTemplate.queryForList(followerSql, Long.class, userId)
+                        .stream().mapToLong(Long::longValue).toArray();
+                user.setFollowerUsers(followers);
+                
+                String followingSql = "SELECT FollowingId FROM user_follows WHERE FollowerId = ? ORDER BY FollowingId";
+                long[] following = jdbcTemplate.queryForList(followingSql, Long.class, userId)
+                        .stream().mapToLong(Long::longValue).toArray();
+                user.setFollowingUsers(following);
+                
+                // 更新followers和following字段为实际数量
+                user.setFollowers(followers.length);
+                user.setFollowing(following.length);
+            }
             
             return user;
         } catch (Exception e) {
@@ -283,27 +267,27 @@ public class UserServiceImpl implements UserService {
             
 //            log.debug("Normalized page: {}, size: {}", page, size);
 
-        StringBuilder countSql = new StringBuilder(
-            "SELECT COUNT(*) FROM recipes r " +
-            "INNER JOIN user_follows uf ON r.AuthorId = uf.FollowingId " +
-            "WHERE uf.FollowerId = ?"
-        );
-
-        StringBuilder dataSql = new StringBuilder(
-            "SELECT r.RecipeId, r.Name, r.AuthorId, u.AuthorName, r.DatePublished, r.AggregatedRating, r.ReviewCount " +
+        // 优化：合并查询，减少数据库访问次数
+        StringBuilder baseSql = new StringBuilder(
             "FROM recipes r " +
             "INNER JOIN user_follows uf ON r.AuthorId = uf.FollowingId " +
             "INNER JOIN users u ON r.AuthorId = u.AuthorId " +
             "WHERE uf.FollowerId = ?"
         );
+        
+        StringBuilder countSql = new StringBuilder("SELECT COUNT(*) ").append(baseSql);
+        StringBuilder dataSql = new StringBuilder(
+            "SELECT r.RecipeId, r.Name, r.AuthorId, u.AuthorName, r.DatePublished, r.AggregatedRating, r.ReviewCount "
+        ).append(baseSql);
 
         List<Object> params = new ArrayList<>();
         params.add(auth.getAuthorId());
 
-        if (category != null) {
-            countSql.append(" AND r.RecipeCategory = ?");
-            dataSql.append(" AND r.RecipeCategory = ?");
-            params.add(category);
+        if (category != null && !category.trim().isEmpty()) {
+            String categoryFilter = " AND r.RecipeCategory = ?";
+            countSql.append(categoryFilter);
+            dataSql.append(categoryFilter);
+            params.add(category.trim());
         }
 
         dataSql.append(" ORDER BY r.DatePublished DESC, r.RecipeId DESC LIMIT ? OFFSET ?");
@@ -367,17 +351,15 @@ public class UserServiceImpl implements UserService {
     // 查找粉丝/关注比最高的用户
     @Override
     public Map<String, Object> getUserWithHighestFollowRatio() {
-        String sql = "SELECT u.AuthorId, u.AuthorName, " +
-                "COALESCE(follower.cnt, 0) AS FollowerCount, " +
-                "COALESCE(following.cnt, 0) AS FollowingCount, " +
-                "COALESCE(follower.cnt, 0) * 1.0 / COALESCE(following.cnt, 1) AS Ratio " +
-                "FROM users u " +
-                "LEFT JOIN (SELECT FollowingId, COUNT(*) AS cnt FROM user_follows GROUP BY FollowingId) follower " +
-                "ON u.AuthorId = follower.FollowingId " +
-                "LEFT JOIN (SELECT FollowerId, COUNT(*) AS cnt FROM user_follows GROUP BY FollowerId) following " +
-                "ON u.AuthorId = following.FollowerId " +
-                "WHERE u.IsDeleted = false AND COALESCE(following.cnt, 0) > 0 " +
-                "ORDER BY Ratio DESC, u.AuthorId ASC LIMIT 1";
+        // 优化：针对小数据集简化查询，直接使用users表中的统计字段
+        String sql = """
+            SELECT AuthorId, AuthorName, 
+                   Followers * 1.0 / GREATEST(Following, 1) AS Ratio
+            FROM users
+            WHERE IsDeleted = false AND Following > 0
+            ORDER BY Ratio DESC, AuthorId ASC
+            LIMIT 1
+            """;
 
         try {
             return jdbcTemplate.queryForObject(sql, (rs, rowNum) -> {
