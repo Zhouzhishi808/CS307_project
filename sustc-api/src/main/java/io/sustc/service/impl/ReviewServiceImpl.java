@@ -716,7 +716,7 @@ public class ReviewServiceImpl implements ReviewService {
     // 辅助方法：构建排序子句
     private String buildOrderByClause(String sort) {
         if (sort == null) {
-            return "ORDER BY r.DateModified DESC, r.RecipeId DESC";
+            return "ORDER BY r.DateModified DESC, r.ReviewId DESC";
         }
 
         switch (sort.toLowerCase()) {

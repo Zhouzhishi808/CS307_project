@@ -254,7 +254,6 @@ public class DatabaseServiceImpl implements DatabaseService {
                 "CREATE INDEX IF NOT EXISTS idx_user_follows_composite ON user_follows(FollowerId, FollowingId)",
 
                 //recipes表索引
-                "CREATE INDEX IF NOT EXISTS idx_name ON recipes(recipeid,name)",
                 "CREATE INDEX IF NOT EXISTS idx_recipes_category ON recipes(RecipeCategory)",
                 "CREATE INDEX IF NOT EXISTS idx_recipes_rating ON recipes(AggregatedRating DESC NULLS LAST)",
                 "CREATE INDEX IF NOT EXISTS idx_recipes_date ON recipes(DatePublished DESC)",
