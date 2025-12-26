@@ -3,6 +3,7 @@ package io.sustc.service.impl;
 import io.sustc.dto.*;
 import io.sustc.service.UserService;
 import io.sustc.util.PasswordUtil;
+import io.sustc.util.PermissionUtils;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.cache.annotation.Cacheable;
@@ -28,6 +29,9 @@ import java.util.*;
 public class UserServiceImpl implements UserService {
     @Autowired
     private JdbcTemplate jdbcTemplate;
+
+    @Autowired
+    PermissionUtils permissionUtils;
 
     // 注册新用户：验证用户名、性别、年龄，加密密码后插入数据库
     // 返回新用户 ID，失败返回 -1（用户名重复、参数无效等）
@@ -145,7 +149,9 @@ public class UserServiceImpl implements UserService {
         if (!isValidUser(auth)) {
             throw new SecurityException("follow");
         }
-
+        if(permissionUtils.validateUser(auth)==-1L){
+            throw new SecurityException("follow");
+        }
         if (auth.getAuthorId() == followeeId) {
             throw new SecurityException("follow");
         }
@@ -179,14 +185,20 @@ public class UserServiceImpl implements UserService {
     @Override
     @Cacheable(value = "users", key = "#userId")
     public UserRecord getById(long userId) {
-        // 参数校验：userId必须大于0  //并不确定到底是不是返回null。由于接口并无明确定义。
+        // 参数校验：userId必须大于0
         if (userId <= 0) {
             return null;
         }
 
         try {
-            String sql = "SELECT * FROM public.users WHERE AuthorId = ?";
+            // 使用高性能视图，一次查询获取所有数据，消除N+1查询问题
+            String sql = "SELECT * FROM v_user_full_info WHERE AuthorId = ?";
             UserRecord user = jdbcTemplate.queryForObject(sql, (rs, rowNum) -> {
+                // 检查用户是否已删除
+                if(rs.getBoolean("IsDeleted")) {
+                    return null;
+                }
+                
                 UserRecord u = new UserRecord();
                 u.setAuthorId(rs.getLong("AuthorId"));
                 u.setAuthorName(rs.getString("AuthorName"));
@@ -196,18 +208,36 @@ public class UserServiceImpl implements UserService {
                 u.setFollowing(rs.getInt("Following"));
                 u.setPassword(rs.getString("Password"));
                 u.setDeleted(rs.getBoolean("IsDeleted"));
+                
+                // 从视图中直接获取关注者数组（已排序）
+                Array followerArray = rs.getArray("FollowerUsers");
+                if (followerArray != null) {
+                    Long[] followerObjects = (Long[]) followerArray.getArray();
+                    long[] followers = new long[followerObjects.length];
+                    for (int i = 0; i < followerObjects.length; i++) {
+                        followers[i] = followerObjects[i];
+                    }
+                    u.setFollowerUsers(followers);
+                } else {
+                    u.setFollowerUsers(new long[0]);
+                }
+                
+                // 从视图中直接获取正在关注数组（已排序）
+                Array followingArray = rs.getArray("FollowingUsers");
+                if (followingArray != null) {
+                    Long[] followingObjects = (Long[]) followingArray.getArray();
+                    long[] following = new long[followingObjects.length];
+                    for (int i = 0; i < followingObjects.length; i++) {
+                        following[i] = followingObjects[i];
+                    }
+                    u.setFollowingUsers(following);
+                } else {
+                    u.setFollowingUsers(new long[0]);
+                }
+                
                 return u;
             }, userId);
-
-            // 查询粉丝列表
-            String followersSql = "SELECT FollowerId FROM user_follows WHERE FollowingId = ? ORDER BY FollowerId";
-            List<Long> followerList = jdbcTemplate.queryForList(followersSql, Long.class, userId);
-            user.setFollowerUsers(followerList == null ? new long[0] : followerList.stream().mapToLong(Long::longValue).toArray());
-
-            // 查询关注列表
-            String followingSql = "SELECT FollowingId FROM user_follows WHERE FollowerId = ? ORDER BY FollowingId";
-            List<Long> followingList = jdbcTemplate.queryForList(followingSql, Long.class, userId);
-            user.setFollowingUsers(followingList == null ? new long[0] : followingList.stream().mapToLong(Long::longValue).toArray());
+            
             return user;
         } catch (Exception e) {
             return null;

@@ -62,4 +62,17 @@ public class ReviewRecord implements Serializable {
      * List of users who have given this review a like
      */
     private long[] likes;
+
+    @Override
+    public String toString() {
+        return "ReviewRecord{" +
+                "reviewId=" + reviewId +
+                ", recipeId=" + recipeId +
+                ", authorId=" + authorId +
+                ", authorName='" + authorName + '\'' +
+                ", rating=" + rating +
+                ", dateModified=" + dateModified +
+                ", likesCount=" + (likes != null ? likes.length : 0) +
+                '}';
+    }
 }

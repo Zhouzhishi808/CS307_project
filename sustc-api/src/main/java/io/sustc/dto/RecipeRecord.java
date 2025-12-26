@@ -139,4 +139,17 @@ public class RecipeRecord implements Serializable {
      */
     private String recipeYield;
 
+    @Override
+    public String toString() {
+        return "RecipeRecord{" +
+                "RecipeId=" + RecipeId +
+                ", name='" + name + '\'' +
+                ", authorId=" + authorId +
+                ", authorName='" + authorName + '\'' +
+                ", recipeCategory='" + recipeCategory + '\'' +
+                ", aggregatedRating=" + aggregatedRating +
+                ", reviewCount=" + reviewCount +
+                ", ingredientsCount=" + (recipeIngredientParts != null ? recipeIngredientParts.length : 0) +
+                '}';
+    }
 }

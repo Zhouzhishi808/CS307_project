@@ -13,6 +13,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.sql.Array;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
@@ -24,7 +25,8 @@ import java.util.*;
 @Service
 @Slf4j
 public class RecipeServiceImpl implements RecipeService {
-
+    @Autowired
+    private PermissionUtils permissionUtils;
     @Autowired
     private JdbcTemplate jdbcTemplate;
 
@@ -55,12 +57,12 @@ public class RecipeServiceImpl implements RecipeService {
         }
 
         try {
-            // 2. 查询食谱基本信息，添加 JOIN users 表来获取 AuthorName
-            String sql = "SELECT r.*, u.AuthorName FROM recipes r " +
+            // 2. 使用优化视图，一次查询获取所有数据包括食材，消除N+1查询
+            String sql = "SELECT r.*, u.AuthorName FROM v_recipe_full_info r " +
                     "LEFT JOIN users u ON r.AuthorId = u.AuthorId " +
                     "WHERE r.RecipeId = ?";
             RecipeRecord recipe = jdbcTemplate.queryForObject(sql, (rs, rowNum) -> {
-                return mapResultSetToRecipeRecord(rs, true);  // 获取食材
+                return mapResultSetToRecipeRecordFromView(rs);
             }, recipeId);
 
             return recipe;
@@ -167,7 +169,66 @@ public class RecipeServiceImpl implements RecipeService {
         return rs.wasNull() ? null : value;
     }
 
-    // 辅助方法：获取食谱的食材数组（按忽略大小写的字典序排序）
+    // 辅助方法：从视图中映射食谱记录（已包含食材数组）
+    private RecipeRecord mapResultSetToRecipeRecordFromView(ResultSet rs) throws SQLException {
+        RecipeRecord recipe = new RecipeRecord();
+
+        // 设置基本字段
+        recipe.setRecipeId(rs.getLong("RecipeId"));
+        recipe.setName(rs.getString("Name"));
+        recipe.setAuthorId(rs.getLong("AuthorId"));
+        recipe.setAuthorName(rs.getString("AuthorName"));
+
+        recipe.setCookTime(rs.getString("CookTime"));
+        recipe.setPrepTime(rs.getString("PrepTime"));
+        recipe.setTotalTime(rs.getString("TotalTime"));
+        recipe.setDatePublished(rs.getTimestamp("DatePublished"));
+        recipe.setDescription(rs.getString("Description"));
+        recipe.setRecipeCategory(rs.getString("RecipeCategory"));
+
+        // 处理评分（可能为null）
+        Float aggregatedRating = getNullableFloat(rs, "AggregatedRating");
+        recipe.setAggregatedRating(aggregatedRating != null ? aggregatedRating : 0.0f);
+        recipe.setReviewCount(rs.getInt("ReviewCount"));
+
+        // 处理营养信息（可能为null）
+        recipe.setCalories(getSafeFloat(rs, "Calories"));
+        recipe.setFatContent(getSafeFloat(rs, "FatContent"));
+        recipe.setSaturatedFatContent(getSafeFloat(rs, "SaturatedFatContent"));
+        recipe.setCholesterolContent(getSafeFloat(rs, "CholesterolContent"));
+        recipe.setSodiumContent(getSafeFloat(rs, "SodiumContent"));
+        recipe.setCarbohydrateContent(getSafeFloat(rs, "CarbohydrateContent"));
+        recipe.setFiberContent(getSafeFloat(rs, "FiberContent"));
+        recipe.setSugarContent(getSafeFloat(rs, "SugarContent"));
+        recipe.setProteinContent(getSafeFloat(rs, "ProteinContent"));
+
+        // 处理servings（存储为VARCHAR，需要转换为int）
+        String servingsStr = rs.getString("RecipeServings");
+        int servings = 0;
+        if (servingsStr != null && !servingsStr.trim().isEmpty()) {
+            try {
+                servings = Integer.parseInt(servingsStr.trim());
+            } catch (NumberFormatException e) {
+                servings = 0;
+            }
+        }
+        recipe.setRecipeServings(servings);
+
+        recipe.setRecipeYield(rs.getString("RecipeYield"));
+
+        // 从视图中直接获取食材数组（已排序）
+        Array ingredientArray = rs.getArray("RecipeIngredientParts");
+        if (ingredientArray != null) {
+            String[] ingredients = (String[]) ingredientArray.getArray();
+            recipe.setRecipeIngredientParts(ingredients);
+        } else {
+            recipe.setRecipeIngredientParts(new String[0]);
+        }
+
+        return recipe;
+    }
+    
+    // 保留原方法以兼容其他地方的调用
     private String[] getRecipeIngredientsArray(long recipeId) {
         String sql = "SELECT IngredientPart FROM recipe_ingredients WHERE RecipeId = ? ORDER BY LOWER(IngredientPart) COLLATE \"C\"";
 
@@ -224,8 +285,8 @@ public class RecipeServiceImpl implements RecipeService {
         // 构建排序子句
         String orderByClause = buildOrderByClause(sort);
 
-        // 查询总记录数（使用表别名 r 以匹配 WHERE 子句）
-        String countSql = "SELECT COUNT(*) FROM recipes r" + whereClause.toString();
+        // 查询总记录数（使用视图以保持一致性）
+        String countSql = "SELECT COUNT(*) FROM v_recipe_full_info r" + whereClause.toString();
         Long total = jdbcTemplate.queryForObject(countSql, Long.class, params.toArray());
         if (total == null) total = 0L;
 
@@ -239,20 +300,19 @@ public class RecipeServiceImpl implements RecipeService {
                     .build();
         }
 
-        // 构建分页查询，添加 JOIN users 表来获取 AuthorName
-        String querySql = "SELECT r.*, u.AuthorName FROM recipes r " +
-                "LEFT JOIN users u ON r.AuthorId = u.AuthorId " +
-                whereClause.toString() +
-                " " + orderByClause + " LIMIT ? OFFSET ?";
-
         // 添加分页参数
         List<Object> queryParams = new ArrayList<>(params);
         queryParams.add(validSize);
         queryParams.add((validPage - 1) * validSize);
 
-        // 执行查询
-        List<RecipeRecord> recipes = jdbcTemplate.query(querySql, queryParams.toArray(), (rs, rowNum) ->
-            mapResultSetToRecipeRecord(rs, true)  // mapResultSetToRecipeRecord 已经会获取食材
+        // 执行查询 - 使用优化的视图查询
+        String optimizedQuerySql = "SELECT r.*, u.AuthorName FROM v_recipe_full_info r " +
+                "LEFT JOIN users u ON r.AuthorId = u.AuthorId " +
+                whereClause.toString() +
+                " " + orderByClause + " LIMIT ? OFFSET ?";
+        
+        List<RecipeRecord> recipes = jdbcTemplate.query(optimizedQuerySql, queryParams.toArray(), (rs, rowNum) ->
+            mapResultSetToRecipeRecordFromView(rs)  // 使用视图版本的映射方法
         );
 
         return PageResult.<RecipeRecord>builder()
@@ -295,10 +355,15 @@ public class RecipeServiceImpl implements RecipeService {
     @CacheEvict(value = {"recipes", "recipeNames", "recipeSearch"}, allEntries = true)
     public long createRecipe(RecipeRecord dto, AuthInfo auth) {
         // 1. 验证权限
+        if (auth == null) {
+            throw new SecurityException("Invalid or inactive user");
+        }
         if (!validateAuthAndPermission(auth)) {
             throw new SecurityException("Invalid or inactive user");
         }
-
+        if(permissionUtils.validateUser(auth)==-1L){
+            throw new SecurityException("Invalid or inactive user");
+        }
         // 2. 验证食谱数据
         validateRecipeData(dto);
 
@@ -371,6 +436,17 @@ public class RecipeServiceImpl implements RecipeService {
             aggregatedRating = dto.getAggregatedRating();
         }
 
+        // 处理营养字段：如果值 <= 0，设置为null（与DatabaseServiceImpl的导入逻辑保持一致）
+        Float calories = dto.getCalories() > 0 ? dto.getCalories() : null;
+        Float fatContent = dto.getFatContent() > 0 ? dto.getFatContent() : null;
+        Float saturatedFatContent = dto.getSaturatedFatContent() > 0 ? dto.getSaturatedFatContent() : null;
+        Float cholesterolContent = dto.getCholesterolContent() > 0 ? dto.getCholesterolContent() : null;
+        Float sodiumContent = dto.getSodiumContent() > 0 ? dto.getSodiumContent() : null;
+        Float carbohydrateContent = dto.getCarbohydrateContent() > 0 ? dto.getCarbohydrateContent() : null;
+        Float fiberContent = dto.getFiberContent() > 0 ? dto.getFiberContent() : null;
+        Float sugarContent = dto.getSugarContent() > 0 ? dto.getSugarContent() : null;
+        Float proteinContent = dto.getProteinContent() > 0 ? dto.getProteinContent() : null;
+
         jdbcTemplate.update(sql,
                 recipeId,
                 dto.getName(),
@@ -383,15 +459,15 @@ public class RecipeServiceImpl implements RecipeService {
                 dto.getRecipeCategory(),
                 aggregatedRating,  // 使用处理后的值
                 dto.getReviewCount(),
-                dto.getCalories(),
-                dto.getFatContent(),
-                dto.getSaturatedFatContent(),
-                dto.getCholesterolContent(),
-                dto.getSodiumContent(),
-                dto.getCarbohydrateContent(),
-                dto.getFiberContent(),
-                dto.getSugarContent(),
-                dto.getProteinContent(),
+                calories,
+                fatContent,
+                saturatedFatContent,
+                cholesterolContent,
+                sodiumContent,
+                carbohydrateContent,
+                fiberContent,
+                sugarContent,
+                proteinContent,
                 dto.getRecipeServings() > 0 ? String.valueOf(dto.getRecipeServings()) : null,
                 dto.getRecipeYield()
         );
@@ -401,15 +477,27 @@ public class RecipeServiceImpl implements RecipeService {
     private void insertRecipeIngredients(long recipeId, String[] ingredientParts) {
         String sql = "INSERT INTO recipe_ingredients (RecipeId, IngredientPart) VALUES (?, ?)";
 
-        List<Object[]> batchArgs = new ArrayList<>();
+        // 使用Set去重，避免违反主键约束
+        // 注意：不要trim()，保留原始的空格
+        Set<String> uniqueIngredients = new HashSet<>();
         for (String ingredient : ingredientParts) {
-            if (ingredient != null && !ingredient.trim().isEmpty()) {
-                batchArgs.add(new Object[]{recipeId, ingredient.trim()});
+            if (ingredient != null && !ingredient.isEmpty()) {
+                uniqueIngredients.add(ingredient);
             }
         }
 
+        List<Object[]> batchArgs = new ArrayList<>();
+        for (String ingredient : uniqueIngredients) {
+            batchArgs.add(new Object[]{recipeId, ingredient});
+        }
+
         if (!batchArgs.isEmpty()) {
-            jdbcTemplate.batchUpdate(sql, batchArgs);
+            try {
+                jdbcTemplate.batchUpdate(sql, batchArgs);
+            } catch (Exception e) {
+                log.error("Error inserting recipe ingredients for recipe {}: {}", recipeId, e.getMessage());
+                throw new RuntimeException("Failed to insert recipe ingredients", e);
+            }
         }
     }
 
@@ -483,17 +571,19 @@ public class RecipeServiceImpl implements RecipeService {
 
     @Override
     @Transactional
-    @CacheEvict(value = {"recipes", "recipeNames"}, key = "#recipeId")
     public void updateTimes(AuthInfo auth, long recipeId, String cookTimeIso, String prepTimeIso) {
-        // 1. 验证权限
+        // Verify authentication and permission
         if (!validateAuthAndPermission(auth)) {
             throw new SecurityException("Invalid or inactive user");
         }
+        if(permissionUtils.validateUser(auth)==-1L){
+            throw new SecurityException("Invalid or inactive user");
+        }
 
-        // 2. 验证食谱存在且用户是作者
+        // Verify recipe ownership
         validateRecipeOwnership(recipeId, auth.getAuthorId());
 
-        // 3. 解析时间字符串
+        // Parse and validate durations
         Duration cookDuration = null;
         Duration prepDuration = null;
 
@@ -501,10 +591,14 @@ public class RecipeServiceImpl implements RecipeService {
             try {
                 cookDuration = Duration.parse(cookTimeIso);
                 if (cookDuration.isNegative()) {
-                    throw new IllegalArgumentException("Cook time cannot be negative");
+                    throw new IllegalArgumentException("Negative duration");
+                }
+                // Check for overflow (Duration can be very large, but we need to ensure it's reasonable)
+                if (cookDuration.getSeconds() > Integer.MAX_VALUE) {
+                    throw new IllegalArgumentException("Duration overflow");
                 }
             } catch (DateTimeParseException e) {
-                throw new IllegalArgumentException("Invalid cook time format. Expected ISO 8601 duration format", e);
+                throw new IllegalArgumentException("Invalid ISO 8601 duration format");
             }
         }
 
@@ -512,41 +606,56 @@ public class RecipeServiceImpl implements RecipeService {
             try {
                 prepDuration = Duration.parse(prepTimeIso);
                 if (prepDuration.isNegative()) {
-                    throw new IllegalArgumentException("Prep time cannot be negative");
+                    throw new IllegalArgumentException("Negative duration");
+                }
+                // Check for overflow
+                if (prepDuration.getSeconds() > Integer.MAX_VALUE) {
+                    throw new IllegalArgumentException("Duration overflow");
                 }
             } catch (DateTimeParseException e) {
-                throw new IllegalArgumentException("Invalid prep time format. Expected ISO 8601 duration format", e);
+                throw new IllegalArgumentException("Invalid ISO 8601 duration format");
             }
         }
 
-        // 4. 获取原始时间（如果新时间为null）
-        String originalCookTime = null;
-        String originalPrepTime = null;
-
+        // Get existing times if needed
+        String currentCookTime = null;
+        String currentPrepTime = null;
+        
         if (cookTimeIso == null || prepTimeIso == null) {
             String sql = "SELECT CookTime, PrepTime FROM recipes WHERE RecipeId = ?";
-            Map<String, Object> result = jdbcTemplate.queryForMap(sql, recipeId);
-            originalCookTime = (String) result.get("cooktime");
-            originalPrepTime = (String) result.get("preptime");
+            try {
+                Map<String, Object> result = jdbcTemplate.queryForMap(sql, recipeId);
+                currentCookTime = (String) result.get("cooktime");
+                currentPrepTime = (String) result.get("preptime");
+            } catch (EmptyResultDataAccessException e) {
+                // Recipe doesn't exist, but this should have been caught by validateRecipeOwnership
+                throw new IllegalArgumentException("Recipe not found");
+            }
         }
 
-        // 5. 计算总时间
-        Duration totalDuration = calculateTotalDuration(
-                cookTimeIso != null ? cookDuration : parseDuration(originalCookTime),
-                prepTimeIso != null ? prepDuration : parseDuration(originalPrepTime)
-        );
+        // Calculate total time
+        String finalCookTime = cookTimeIso != null ? cookTimeIso : currentCookTime;
+        String finalPrepTime = prepTimeIso != null ? prepTimeIso : currentPrepTime;
+        
+        Duration totalDuration = Duration.ZERO;
+        if (finalCookTime != null) {
+            try {
+                totalDuration = totalDuration.plus(Duration.parse(finalCookTime));
+            } catch (DateTimeParseException e) {
+                // Existing data might be invalid, treat as zero
+            }
+        }
+        if (finalPrepTime != null) {
+            try {
+                totalDuration = totalDuration.plus(Duration.parse(finalPrepTime));
+            } catch (DateTimeParseException e) {
+                // Existing data might be invalid, treat as zero
+            }
+        }
 
-        // 6. 更新数据库
-        updateRecipeTimes(recipeId,
-                cookTimeIso != null ? cookTimeIso : originalCookTime,
-                prepTimeIso != null ? prepTimeIso : originalPrepTime,
-                formatDuration(totalDuration));
-
-        log.info("Recipe times updated: ID={}, CookTime={}, PrepTime={}, TotalTime={}",
-                recipeId,
-                cookTimeIso != null ? cookTimeIso : originalCookTime,
-                prepTimeIso != null ? prepTimeIso : originalPrepTime,
-                formatDuration(totalDuration));
+        // Update database
+        String updateSql = "UPDATE recipes SET CookTime = ?, PrepTime = ?, TotalTime = ? WHERE RecipeId = ?";
+        jdbcTemplate.update(updateSql, finalCookTime, finalPrepTime, totalDuration.toString(), recipeId);
     }
 
     // 辅助方法：解析时间字符串

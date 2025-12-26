@@ -71,6 +71,81 @@ public class DatabaseServiceImpl implements DatabaseService {
         createViews();
         createIndexes();
     }
+    
+    private void createPerformanceProcedures() {
+        // 高性能用户查询存储过程
+        String userProc = "CREATE OR REPLACE FUNCTION get_user_with_follows(user_id BIGINT)\n" +
+                "RETURNS TABLE(\n" +
+                "  AuthorId BIGINT,\n" +
+                "  AuthorName VARCHAR,\n" +
+                "  Gender VARCHAR,\n" +
+                "  Age INTEGER,\n" +
+                "  Followers INTEGER,\n" +
+                "  Following INTEGER,\n" +
+                "  Password VARCHAR,\n" +
+                "  IsDeleted BOOLEAN,\n" +
+                "  FollowerUsers BIGINT[],\n" +
+                "  FollowingUsers BIGINT[]\n" +
+                ")\n" +
+                "LANGUAGE plpgsql\n" +
+                "AS $$\n" +
+                "BEGIN\n" +
+                "  RETURN QUERY\n" +
+                "  SELECT u.AuthorId, u.AuthorName, u.Gender, u.Age, u.Followers, u.Following, u.Password, u.IsDeleted,\n" +
+                "         ARRAY(SELECT uf1.FollowerId FROM user_follows uf1 WHERE uf1.FollowingId = user_id ORDER BY uf1.FollowerId),\n" +
+                "         ARRAY(SELECT uf2.FollowingId FROM user_follows uf2 WHERE uf2.FollowerId = user_id ORDER BY uf2.FollowingId)\n" +
+                "  FROM users u\n" +
+                "  WHERE u.AuthorId = user_id;\n" +
+                "END;\n" +
+                "$$;";
+        
+        // 高性能菜谱查询存储过程
+        String recipeProc = "CREATE OR REPLACE FUNCTION get_recipe_with_ingredients(recipe_id BIGINT)\n" +
+                "RETURNS TABLE(\n" +
+                "  RecipeId BIGINT,\n" +
+                "  Name VARCHAR,\n" +
+                "  AuthorId BIGINT,\n" +
+                "  AuthorName VARCHAR,\n" +
+                "  CookTime VARCHAR,\n" +
+                "  PrepTime VARCHAR,\n" +
+                "  TotalTime VARCHAR,\n" +
+                "  DatePublished TIMESTAMP,\n" +
+                "  Description TEXT,\n" +
+                "  RecipeCategory VARCHAR,\n" +
+                "  AggregatedRating DECIMAL,\n" +
+                "  ReviewCount INTEGER,\n" +
+                "  Calories DECIMAL,\n" +
+                "  FatContent DECIMAL,\n" +
+                "  SaturatedFatContent DECIMAL,\n" +
+                "  CholesterolContent DECIMAL,\n" +
+                "  SodiumContent DECIMAL,\n" +
+                "  CarbohydrateContent DECIMAL,\n" +
+                "  FiberContent DECIMAL,\n" +
+                "  SugarContent DECIMAL,\n" +
+                "  ProteinContent DECIMAL,\n" +
+                "  RecipeServings VARCHAR,\n" +
+                "  RecipeYield VARCHAR,\n" +
+                "  RecipeIngredientParts VARCHAR[]\n" +
+                ")\n" +
+                "LANGUAGE plpgsql\n" +
+                "AS $$\n" +
+                "BEGIN\n" +
+                "  RETURN QUERY\n" +
+                "  SELECT r.*, u.AuthorName,\n" +
+                "         ARRAY(SELECT ri.IngredientPart FROM recipe_ingredients ri WHERE ri.RecipeId = recipe_id ORDER BY LOWER(ri.IngredientPart) COLLATE \"C\")\n" +
+                "  FROM recipes r\n" +
+                "  LEFT JOIN users u ON r.AuthorId = u.AuthorId\n" +
+                "  WHERE r.RecipeId = recipe_id;\n" +
+                "END;\n" +
+                "$$;";
+        
+        try {
+            jdbcTemplate.execute(userProc);
+            jdbcTemplate.execute(recipeProc);
+        } catch (Exception e) {
+            log.warn("Failed to create performance procedures: {}", e.getMessage());
+        }
+    }
 
     public void createTriggers() {
     String t1= "CREATE OR REPLACE FUNCTION update_follow_counts()\n" +
@@ -127,52 +202,78 @@ public class DatabaseServiceImpl implements DatabaseService {
                 "    u.Age,\n" +
                 "    u.Followers,\n" +
                 "    u.Following,\n" +
+                "    u.Password,\n" +
                 "    u.IsDeleted,\n" +
-                "    ARRAY_AGG(DISTINCT uf_followers.FollowerId) FILTER (WHERE uf_followers.FollowerId IS NOT NULL) AS FollowerUsers,\n" +
-                "    ARRAY_AGG(DISTINCT uf_following.FollowingId) FILTER (WHERE uf_following.FollowingId IS NOT NULL) AS FollowingUsers\n" +
+                "    ARRAY_AGG(DISTINCT uf_followers.FollowerId ORDER BY uf_followers.FollowerId) FILTER (WHERE uf_followers.FollowerId IS NOT NULL) AS FollowerUsers,\n" +
+                "    ARRAY_AGG(DISTINCT uf_following.FollowingId ORDER BY uf_following.FollowingId) FILTER (WHERE uf_following.FollowingId IS NOT NULL) AS FollowingUsers\n" +
                 "FROM users u\n" +
                 "LEFT JOIN user_follows uf_followers ON u.AuthorId = uf_followers.FollowingId\n" +
                 "LEFT JOIN user_follows uf_following ON u.AuthorId = uf_following.FollowerId\n" +
-                "GROUP BY u.AuthorId;";//用户完整信息视图，用于简化 UserService.getById() 的实现
+                "GROUP BY u.AuthorId, u.AuthorName, u.Gender, u.Age, u.Followers, u.Following, u.Password, u.IsDeleted;";//用户完整信息视图，用于简化 UserService.getById() 的实现
 
         String V2="CREATE OR REPLACE VIEW v_recipe_full_info AS\n" +
                 "SELECT \n" +
                 "    r.*,\n" +
-                "    ARRAY_AGG(ri.IngredientPart ORDER BY ri.IngredientPart) FILTER (WHERE ri.IngredientPart IS NOT NULL) AS RecipeIngredientParts\n" +
+                "    ARRAY_AGG(ri.IngredientPart ORDER BY LOWER(ri.IngredientPart) COLLATE \"C\") FILTER (WHERE ri.IngredientPart IS NOT NULL) AS RecipeIngredientParts\n" +
                 "FROM recipes r\n" +
                 "LEFT JOIN recipe_ingredients ri ON r.RecipeId = ri.RecipeId\n" +
                 "GROUP BY r.RecipeId;";//菜谱完整信息视图，用于简化RecipeService.getRecipeById() 和 searchRecipes() 的实现。
+        
+        // 性能优化视图：预计算评论点赞数
+        String V3="CREATE OR REPLACE VIEW v_review_with_likes AS\n" +
+                "SELECT \n" +
+                "    r.*,\n" +
+                "    u.AuthorName,\n" +
+                "    COALESCE(COUNT(rl.ReviewId), 0) as like_count,\n" +
+                "    ARRAY_AGG(rl.AuthorId ORDER BY rl.AuthorId) FILTER (WHERE rl.AuthorId IS NOT NULL) AS likes_array\n" +
+                "FROM reviews r\n" +
+                "LEFT JOIN users u ON r.AuthorId = u.AuthorId\n" +
+                "LEFT JOIN review_likes rl ON r.ReviewId = rl.ReviewId\n" +
+                "GROUP BY r.ReviewId, r.RecipeId, r.AuthorId, r.Rating, r.Review, r.DateSubmitted, r.DateModified, u.AuthorName;";
+        
         jdbcTemplate.execute(V1);
         jdbcTemplate.execute(V2);
+        jdbcTemplate.execute(V3);
+        
+        createPerformanceProcedures();
     }
     public void createIndexes(){
         // 索引创建语句数组
         String[] indexSQLs = {
+                //user 表索引
+                "CREATE INDEX IF NOT EXISTS USER_PWD ON USERS(AUTHORID,PASSWORD)" ,
+                "CREATE INDEX IF NOT EXISTS idx_users_active ON users(AuthorId) WHERE IsDeleted = false",
+                
                 //user_follows表索引
                 "CREATE INDEX IF NOT EXISTS idx_user_follows_follower ON user_follows(FollowerId)",
                 "CREATE INDEX IF NOT EXISTS idx_user_follows_following ON user_follows(FollowingId)",
+                "CREATE INDEX IF NOT EXISTS idx_user_follows_composite ON user_follows(FollowerId, FollowingId)",
 
                 //recipes表索引
                 "CREATE INDEX IF NOT EXISTS idx_recipes_category ON recipes(RecipeCategory)",
-                "CREATE INDEX IF NOT EXISTS idx_recipes_rating ON recipes(AggregatedRating DESC)",
+                "CREATE INDEX IF NOT EXISTS idx_recipes_rating ON recipes(AggregatedRating DESC NULLS LAST)",
                 "CREATE INDEX IF NOT EXISTS idx_recipes_date ON recipes(DatePublished DESC)",
                 "CREATE INDEX IF NOT EXISTS idx_recipes_calories ON recipes(Calories)",
                 "CREATE INDEX IF NOT EXISTS idx_recipes_author ON recipes(AuthorId)",
+                "CREATE INDEX IF NOT EXISTS idx_recipes_category_rating ON recipes(RecipeCategory, AggregatedRating DESC NULLS LAST)",
 
                 //reviews表索引
                 "CREATE INDEX IF NOT EXISTS idx_reviews_recipe ON reviews(RecipeId)",
                 "CREATE INDEX IF NOT EXISTS idx_reviews_author ON reviews(AuthorId)",
                 "CREATE INDEX IF NOT EXISTS idx_reviews_date ON reviews(DateModified DESC)",
+                "CREATE INDEX IF NOT EXISTS idx_reviews_recipe_date ON reviews(RecipeId, DateModified DESC)",
 
                 //review_likes表索引
                 "CREATE INDEX IF NOT EXISTS idx_review_likes_review ON review_likes(ReviewId)",
                 "CREATE INDEX IF NOT EXISTS idx_review_likes_author ON review_likes(AuthorId)",
+                "CREATE INDEX IF NOT EXISTS idx_review_likes_composite ON review_likes(AuthorId, ReviewId)",
 
                 //recipe_ingredients表索引
                 "CREATE INDEX IF NOT EXISTS idx_recipe_ingredients_recipe ON recipe_ingredients(RecipeId)",
 
                 //复合索引
                 "CREATE INDEX IF NOT EXISTS idx_recipes_author_date ON recipes(AuthorId, DatePublished DESC)",
+                "CREATE INDEX IF NOT EXISTS idx_feed_optimization ON user_follows(FollowerId) INCLUDE (FollowingId)",
 
                 //启用pg_trgm扩展
                 "CREATE EXTENSION IF NOT EXISTS pg_trgm",
@@ -184,7 +285,11 @@ public class DatabaseServiceImpl implements DatabaseService {
 
         // 逐条执行索引创建语句
         for (String sql : indexSQLs) {
-            jdbcTemplate.execute(sql);
+            try {
+                jdbcTemplate.execute(sql);
+            } catch (Exception e) {
+                log.warn("Failed to create index: {} - {}", sql, e.getMessage());
+            }
         }
     }
 

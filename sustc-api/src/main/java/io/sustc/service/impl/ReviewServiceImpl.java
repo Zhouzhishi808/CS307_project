@@ -20,6 +20,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.sql.Array;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.*;
@@ -732,20 +733,15 @@ public class ReviewServiceImpl implements ReviewService {
         }
     }
 
-    // 辅助方法：构建查询语句
+    // 辅助方法：构建优化的查询语句（使用视图）
     private String buildQuerySql(String orderByClause) {
-        return "SELECT r.*, u.AuthorName, " +
-                "COALESCE(COUNT(rl.ReviewId), 0) as like_count " +
-                "FROM reviews r " +
-                "LEFT JOIN users u ON r.AuthorId = u.AuthorId " +
-                "LEFT JOIN review_likes rl ON r.ReviewId = rl.ReviewId " +
+        return "SELECT * FROM v_review_with_likes r " +
                 "WHERE r.RecipeId = ? " +
-                "GROUP BY r.ReviewId, u.AuthorName " +
                 orderByClause + " " +
                 "LIMIT ? OFFSET ?";
     }
 
-    // 辅助方法：执行分页查询
+    // 辅助方法：执行优化的分页查询（使用视图，消除N+1查询）
     private List<ReviewRecord> executePaginatedQuery(
             long recipeId, String sql, int limit, int offset
     ) {
@@ -775,15 +771,25 @@ public class ReviewServiceImpl implements ReviewService {
                         review.setDateModified(dateModified);
                     }
 
-                    // 获取点赞用户列表
-                    review.setLikes(getLikesForReview(review.getReviewId()));
+                    // 从视图中直接获取点赞数组（已排序），消除N+1查询问题
+                    Array likesArray = rs.getArray("likes_array");
+                    if (likesArray != null) {
+                        Long[] likeObjects = (Long[]) likesArray.getArray();
+                        long[] likes = new long[likeObjects.length];
+                        for (int i = 0; i < likeObjects.length; i++) {
+                            likes[i] = likeObjects[i];
+                        }
+                        review.setLikes(likes);
+                    } else {
+                        review.setLikes(new long[0]);
+                    }
 
                     return review;
                 }
         );
     }
 
-    // 辅助方法：获取评论的点赞用户列表
+    // 保留原方法以兼容其他地方的调用（已由视图优化）
     private long[] getLikesForReview(long reviewId) {
         String sql = "SELECT AuthorId FROM review_likes WHERE ReviewId = ? ORDER BY AuthorId";
 
