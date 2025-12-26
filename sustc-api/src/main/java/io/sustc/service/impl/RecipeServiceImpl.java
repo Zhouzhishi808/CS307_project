@@ -39,7 +39,7 @@ public class RecipeServiceImpl implements RecipeService {
         } catch (EmptyResultDataAccessException e) {
             return null;
         } catch (Exception e) {
-            log.error("Error getting recipe name by ID {}: {}", id, e.getMessage(), e);
+           // log.error("Error getting recipe name by ID {}: {}", id, e.getMessage(), e);
             return null;
         }
     }
@@ -65,7 +65,7 @@ public class RecipeServiceImpl implements RecipeService {
         } catch (EmptyResultDataAccessException e) {
             return null;
         } catch (Exception e) {
-            log.error("Error getting recipe by ID {}: {}", recipeId, e.getMessage(), e);
+           // log.error("Error getting recipe by ID {}: {}", recipeId, e.getMessage(), e);
             throw new RuntimeException("Failed to get recipe by ID: " + e.getMessage(), e);
         }
     }
@@ -176,7 +176,7 @@ public class RecipeServiceImpl implements RecipeService {
             }
             return ingredientsList.toArray(new String[0]);
         } catch (Exception e) {
-            log.debug("Error getting ingredients for recipe {}: {}", recipeId, e.getMessage());
+           // log.debug("Error getting ingredients for recipe {}: {}", recipeId, e.getMessage());
             return new String[0];
         }
     }
@@ -282,7 +282,7 @@ public class RecipeServiceImpl implements RecipeService {
             case "id_asc":
                 return "ORDER BY r.RecipeId ASC";
             default:
-                log.warn("Invalid sort parameter '{}', using default 'date_desc'", sort);
+                //log.warn("Invalid sort parameter '{}', using default 'date_desc'", sort);
                 return "ORDER BY r.DatePublished DESC, r.RecipeId DESC";
         }
     }
@@ -314,8 +314,8 @@ public class RecipeServiceImpl implements RecipeService {
             insertRecipeIngredients(newRecipeId, dto.getRecipeIngredientParts());
         }
 
-        log.info("Recipe created successfully: ID={}, Name={}, Author={}",
-                newRecipeId, dto.getName(), auth.getAuthorId());
+        //log.info("Recipe created successfully: ID={}, Name={}, Author={}",
+               // newRecipeId, dto.getName(), auth.getAuthorId());
 
         return newRecipeId;
     }
@@ -431,7 +431,7 @@ public class RecipeServiceImpl implements RecipeService {
             try {
                 jdbcTemplate.batchUpdate(sql, batchArgs);
             } catch (Exception e) {
-                log.error("Error inserting recipe ingredients for recipe {}: {}", recipeId, e.getMessage());
+                //log.error("Error inserting recipe ingredients for recipe {}: {}", recipeId, e.getMessage());
                 throw new RuntimeException("Failed to insert recipe ingredients", e);
             }
         }
@@ -461,7 +461,7 @@ public class RecipeServiceImpl implements RecipeService {
         // 3.4 删除食谱
         deleteRecipeRecord(recipeId);
 
-        log.info("Recipe deleted successfully: ID={}, Author={}", recipeId, auth.getAuthorId());
+        //log.info("Recipe deleted successfully: ID={}, Author={}", recipeId, auth.getAuthorId());
     }
 
     // 辅助方法：验证食谱所有权
@@ -507,18 +507,34 @@ public class RecipeServiceImpl implements RecipeService {
     @Override
     @Transactional
     public void updateTimes(AuthInfo auth, long recipeId, String cookTimeIso, String prepTimeIso) {
-        // Verify authentication and permission
-        if (!validateAuthAndPermission(auth)) {
-            throw new SecurityException("Invalid or inactive user");
-        }
-        if(permissionUtils.validateUser(auth)==-1L){
+        // Verify authentication and permission (merged validation)
+        if (!validateAuthAndPermission(auth) || permissionUtils.validateUser(auth) == -1L) {
             throw new SecurityException("Invalid or inactive user");
         }
 
-        // Verify recipe ownership
-        validateRecipeOwnership(recipeId, auth.getAuthorId());
+        // Combined query: verify ownership and get existing times in one go
+        String sql = "SELECT AuthorId, CookTime, PrepTime FROM recipes WHERE RecipeId = ?";
+        String currentCookTime = null;
+        String currentPrepTime = null;
+        
+        try {
+            Map<String, Object> result = jdbcTemplate.queryForMap(sql, recipeId);
+            Long authorId = (Long) result.get("authorid");
+            
+            // Verify ownership
+            if (authorId == null || authorId != auth.getAuthorId()) {
+                throw new SecurityException("User is not the author of this recipe");
+            }
+            
+            // Get existing times
+            currentCookTime = (String) result.get("cooktime");
+            currentPrepTime = (String) result.get("preptime");
+            
+        } catch (EmptyResultDataAccessException e) {
+            throw new IllegalArgumentException("Recipe does not exist");
+        }
 
-        // Parse and validate durations
+        // Parse and validate durations (reuse parsed objects)
         Duration cookDuration = null;
         Duration prepDuration = null;
 
@@ -552,37 +568,29 @@ public class RecipeServiceImpl implements RecipeService {
             }
         }
 
-        // Get existing times if needed
-        String currentCookTime = null;
-        String currentPrepTime = null;
-        
-        if (cookTimeIso == null || prepTimeIso == null) {
-            String sql = "SELECT CookTime, PrepTime FROM recipes WHERE RecipeId = ?";
-            try {
-                Map<String, Object> result = jdbcTemplate.queryForMap(sql, recipeId);
-                currentCookTime = (String) result.get("cooktime");
-                currentPrepTime = (String) result.get("preptime");
-            } catch (EmptyResultDataAccessException e) {
-                // Recipe doesn't exist, but this should have been caught by validateRecipeOwnership
-                throw new IllegalArgumentException("Recipe not found");
-            }
-        }
-
-        // Calculate total time
+        // Calculate total time using already parsed durations
         String finalCookTime = cookTimeIso != null ? cookTimeIso : currentCookTime;
         String finalPrepTime = prepTimeIso != null ? prepTimeIso : currentPrepTime;
         
         Duration totalDuration = Duration.ZERO;
-        if (finalCookTime != null) {
+        
+        // Use already parsed cookDuration if available, otherwise parse existing time
+        if (cookDuration != null) {
+            totalDuration = totalDuration.plus(cookDuration);
+        } else if (currentCookTime != null) {
             try {
-                totalDuration = totalDuration.plus(Duration.parse(finalCookTime));
+                totalDuration = totalDuration.plus(Duration.parse(currentCookTime));
             } catch (DateTimeParseException e) {
                 // Existing data might be invalid, treat as zero
             }
         }
-        if (finalPrepTime != null) {
+        
+        // Use already parsed prepDuration if available, otherwise parse existing time
+        if (prepDuration != null) {
+            totalDuration = totalDuration.plus(prepDuration);
+        } else if (currentPrepTime != null) {
             try {
-                totalDuration = totalDuration.plus(Duration.parse(finalPrepTime));
+                totalDuration = totalDuration.plus(Duration.parse(currentPrepTime));
             } catch (DateTimeParseException e) {
                 // Existing data might be invalid, treat as zero
             }
@@ -628,54 +636,126 @@ public class RecipeServiceImpl implements RecipeService {
 
     @Override
     public Map<String, Object> getClosestCaloriePair() {
+        // 优化策略：先获取按卡路里排序的食谱，然后在Java中找最小差值
+        // 这避免了O(n²)的笛卡尔积连接
         String sql = """
-            SELECT r1.RecipeId AS RecipeA, r2.RecipeId AS RecipeB,
-                   r1.Calories AS CaloriesA, r2.Calories AS CaloriesB,
-                   ABS(r1.Calories - r2.Calories) AS Difference
-            FROM recipes r1
-            JOIN recipes r2 ON r1.RecipeId < r2.RecipeId
-            WHERE r1.Calories IS NOT NULL AND r2.Calories IS NOT NULL
-            ORDER BY Difference ASC, r1.RecipeId ASC, r2.RecipeId ASC
-            LIMIT 1
+            SELECT RecipeId, Calories 
+            FROM recipes 
+            WHERE Calories IS NOT NULL 
+            ORDER BY Calories, RecipeId
             """;
 
         try {
-            return jdbcTemplate.query(sql, rs -> {
-                if (!rs.next()) {
-                    return null;
+            List<Map<String, Object>> recipes = jdbcTemplate.queryForList(sql);
+            
+            if (recipes.size() < 2) {
+                return null;
+            }
+            
+            double minDiff = Double.MAX_VALUE;
+            Map<String, Object> result = null;
+            
+            // 由于已按卡路里排序，只需检查相邻的食谱对
+            for (int i = 0; i < recipes.size() - 1; i++) {
+                Map<String, Object> r1 = recipes.get(i);
+                Map<String, Object> r2 = recipes.get(i + 1);
+                
+                double calories1 = ((Number) r1.get("Calories")).doubleValue();
+                double calories2 = ((Number) r2.get("Calories")).doubleValue();
+                double diff = Math.abs(calories2 - calories1);
+                
+                if (diff < minDiff) {
+                    minDiff = diff;
+                    long id1 = ((Number) r1.get("RecipeId")).longValue();
+                    long id2 = ((Number) r2.get("RecipeId")).longValue();
+                    
+                    // 确保RecipeA < RecipeB
+                    if (id1 < id2) {
+                        result = createCaloriePairResult(id1, id2, calories1, calories2, diff);
+                    } else {
+                        result = createCaloriePairResult(id2, id1, calories2, calories1, diff);
+                    }
+                } else if (diff == minDiff && result != null) {
+                    // 如果差值相同，选择RecipeId较小的组合
+                    long id1 = ((Number) r1.get("RecipeId")).longValue();
+                    long id2 = ((Number) r2.get("RecipeId")).longValue();
+                    long currentA = (Long) result.get("RecipeA");
+                    
+                    long minId = Math.min(id1, id2);
+                    if (minId < currentA) {
+                        if (id1 < id2) {
+                            result = createCaloriePairResult(id1, id2, calories1, calories2, diff);
+                        } else {
+                            result = createCaloriePairResult(id2, id1, calories2, calories1, diff);
+                        }
+                    }
                 }
-                Map<String, Object> result = new HashMap<>();
-                result.put("RecipeA", rs.getLong("RecipeA"));
-                result.put("RecipeB", rs.getLong("RecipeB"));
-                result.put("CaloriesA", rs.getDouble("CaloriesA"));
-                result.put("CaloriesB", rs.getDouble("CaloriesB"));
-                result.put("Difference", rs.getDouble("Difference"));
-                return result;
-            });
+            }
+            
+            return result;
         } catch (Exception e) {
-            log.error("Error computing closest calorie pair: {}", e.getMessage(), e);
             return null;
         }
+    }
+    
+    private Map<String, Object> createCaloriePairResult(long recipeA, long recipeB, 
+                                                      double caloriesA, double caloriesB, double diff) {
+        Map<String, Object> result = new HashMap<>();
+        result.put("RecipeA", recipeA);
+        result.put("RecipeB", recipeB);
+        result.put("CaloriesA", caloriesA);
+        result.put("CaloriesB", caloriesB);
+        result.put("Difference", diff);
+        return result;
     }
 
     @Override
     public List<Map<String, Object>> getTop3MostComplexRecipesByIngredients() {
-        String sql = """
-            SELECT r.RecipeId, r.Name, COUNT(ri.IngredientPart) AS IngredientCount
-            FROM recipe_ingredients ri
-            JOIN recipes r ON r.RecipeId = ri.RecipeId
-            GROUP BY r.RecipeId, r.Name
-            ORDER BY IngredientCount DESC, r.RecipeId ASC
+        // 优化策略：避免JOIN操作，分两步查询以减少数据库负载
+        // 第一步：获取食材数量最多的前3个食谱ID
+        String countSql = """
+            SELECT RecipeId, COUNT(*)::INTEGER AS IngredientCount
+            FROM recipe_ingredients
+            GROUP BY RecipeId
+            ORDER BY IngredientCount DESC, RecipeId ASC
             LIMIT 3
             """;
-
-        return jdbcTemplate.query(sql, (rs, i) -> {
-            Map<String, Object> row = new HashMap<>();
-            row.put("RecipeId", rs.getLong("RecipeId"));
-            row.put("Name", rs.getString("Name"));
-            row.put("IngredientCount", rs.getInt("IngredientCount"));
-            return row;
+        
+        List<Map<String, Object>> topRecipeIds = jdbcTemplate.queryForList(countSql);
+        
+        if (topRecipeIds.isEmpty()) {
+            return new ArrayList<>();
+        }
+        
+        // 第二步：批量获取食谱名称（使用IN查询）
+        List<Long> recipeIds = topRecipeIds.stream()
+            .map(row -> ((Number) row.get("RecipeId")).longValue())
+            .toList();
+            
+        // 构建IN查询的占位符
+        String inClause = String.join(",", Collections.nCopies(recipeIds.size(), "?"));
+        String nameSql = "SELECT RecipeId, Name FROM recipes WHERE RecipeId IN (" + inClause + ")";
+        
+        Map<Long, String> nameMap = jdbcTemplate.query(nameSql, recipeIds.toArray(), rs -> {
+            Map<Long, String> map = new HashMap<>();
+            while (rs.next()) {
+                map.put(rs.getLong("RecipeId"), rs.getString("Name"));
+            }
+            return map;
         });
+        
+        // 组合结果，保持原始排序，确保类型正确
+        return topRecipeIds.stream()
+            .map(row -> {
+                Long recipeId = ((Number) row.get("RecipeId")).longValue();
+                Integer ingredientCount = ((Number) row.get("IngredientCount")).intValue();
+                Map<String, Object> result = new HashMap<>();
+                result.put("RecipeId", recipeId);
+                result.put("Name", nameMap.get(recipeId));
+                result.put("IngredientCount", ingredientCount);
+                return result;
+            })
+            .collect(ArrayList::new, (list, item) -> list.add(item), (list1, list2) -> list1.addAll(list2));
     }
 
 }

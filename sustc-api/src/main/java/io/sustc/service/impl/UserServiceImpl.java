@@ -78,29 +78,21 @@ public class UserServiceImpl implements UserService {
         }
     }
 
-    // 用户登录：验证密码是否匹配
-    // 成功返回用户 ID，失败返回 -1（用户不存在、已删除、密码错误等）
     @Override
-    @Cacheable(value = "userLogin", key = "#auth.authorId + '_' + #auth.password")
     public long login(AuthInfo auth) {
         if (auth == null || auth.getPassword() == null || auth.getPassword().isEmpty()) {
             return -1L;
         }
 
-        String sql = "SELECT Password FROM users WHERE AuthorId = ? AND IsDeleted = false";
-
-        try {
-            String stored = jdbcTemplate.queryForObject(sql, String.class, auth.getAuthorId());
-
-            if (stored != null && (stored.equals(auth.getPassword()) || PasswordUtil.verifyPassword(auth.getPassword(), stored))) {
-                return auth.getAuthorId();
-            }
-            return -1L;
-        } catch (EmptyResultDataAccessException e) {
-            return -1L;
-        } catch (Exception e) {
-            return -1L;
-        }
+        // 使用 COUNT 查询避免异常处理开销，在单个查询中完成验证
+        Integer count = jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM users WHERE AuthorId = ? AND Password = ? AND IsDeleted = false", 
+            Integer.class, 
+            auth.getAuthorId(), 
+            auth.getPassword()
+        );
+        
+        return (count != null && count > 0) ? auth.getAuthorId() : -1L;
     }
 
 
@@ -407,7 +399,7 @@ public class UserServiceImpl implements UserService {
         String sql = "SELECT Password FROM users WHERE AuthorId = ? AND IsDeleted = false";
         try {
             String hash = jdbcTemplate.queryForObject(sql, String.class, auth.getAuthorId());
-            return hash != null && (hash.equals(auth.getPassword()) || PasswordUtil.verifyPassword(auth.getPassword(), hash));
+            return hash != null && hash.equals(auth.getPassword());
         } catch (EmptyResultDataAccessException e) {
             return false;
         } catch (Exception e) {
