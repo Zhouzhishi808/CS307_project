@@ -18,6 +18,7 @@ import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeParseException;
 import java.util.*;
+import java.util.Objects;
 
 @Service
 @Slf4j
@@ -555,16 +556,14 @@ public class RecipeServiceImpl implements RecipeService {
     @Override
     @Transactional
     public void updateTimes(AuthInfo auth, long recipeId, String cookTimeIso, String prepTimeIso) {
-        // Verify authentication and permission
-        if (!validateAuthAndPermission(auth)) {
-            throw new SecurityException("Invalid or inactive user");
-        }
-        if(permissionUtils.validateUser(auth)==-1L){
+        // Single user validation check
+        long userId = permissionUtils.validateUser(auth);
+        if (userId <= 0) {
             throw new SecurityException("Invalid or inactive user");
         }
 
-        // Verify recipe ownership
-        validateRecipeOwnership(recipeId, auth.getAuthorId());
+        // Verify recipe ownership (will be combined with data fetch)
+        // validateRecipeOwnership(recipeId, auth.getAuthorId());
 
         // Parse and validate durations
         Duration cookDuration = null;
@@ -600,35 +599,44 @@ public class RecipeServiceImpl implements RecipeService {
             }
         }
 
-        // Get existing times if needed
+        // Get existing data and verify ownership in single query
+        String sql = "SELECT AuthorId, CookTime, PrepTime FROM recipes WHERE RecipeId = ?";
         String currentCookTime = null;
         String currentPrepTime = null;
         
-        if (cookTimeIso == null || prepTimeIso == null) {
-            String sql = "SELECT CookTime, PrepTime FROM recipes WHERE RecipeId = ?";
-            try {
-                Map<String, Object> result = jdbcTemplate.queryForMap(sql, recipeId);
-                currentCookTime = (String) result.get("cooktime");
-                currentPrepTime = (String) result.get("preptime");
-            } catch (EmptyResultDataAccessException e) {
-                // Recipe doesn't exist, but this should have been caught by validateRecipeOwnership
-                throw new IllegalArgumentException("Recipe not found");
+        try {
+            Map<String, Object> result = jdbcTemplate.queryForMap(sql, recipeId);
+            Long authorId = (Long) result.get("authorid");
+            if (authorId == null || authorId != auth.getAuthorId()) {
+                throw new SecurityException("User is not the author of this recipe");
             }
+            currentCookTime = (String) result.get("cooktime");
+            currentPrepTime = (String) result.get("preptime");
+        } catch (EmptyResultDataAccessException e) {
+            throw new IllegalArgumentException("Recipe not found");
         }
 
-        // Calculate total time
+        // Calculate total time using already parsed durations
         String finalCookTime = cookTimeIso != null ? cookTimeIso : currentCookTime;
         String finalPrepTime = prepTimeIso != null ? prepTimeIso : currentPrepTime;
         
         Duration totalDuration = Duration.ZERO;
-        if (finalCookTime != null) {
+        
+        // Use already parsed cook duration if available, otherwise parse final cook time
+        if (cookDuration != null) {
+            totalDuration = totalDuration.plus(cookDuration);
+        } else if (finalCookTime != null) {
             try {
                 totalDuration = totalDuration.plus(Duration.parse(finalCookTime));
             } catch (DateTimeParseException e) {
                 // Existing data might be invalid, treat as zero
             }
         }
-        if (finalPrepTime != null) {
+        
+        // Use already parsed prep duration if available, otherwise parse final prep time  
+        if (prepDuration != null) {
+            totalDuration = totalDuration.plus(prepDuration);
+        } else if (finalPrepTime != null) {
             try {
                 totalDuration = totalDuration.plus(Duration.parse(finalPrepTime));
             } catch (DateTimeParseException e) {
@@ -636,9 +644,22 @@ public class RecipeServiceImpl implements RecipeService {
             }
         }
 
-        // Update database
-        String updateSql = "UPDATE recipes SET CookTime = ?, PrepTime = ?, TotalTime = ? WHERE RecipeId = ?";
-        jdbcTemplate.update(updateSql, finalCookTime, finalPrepTime, totalDuration.toString(), recipeId);
+        // Update database only if there are changes
+        String totalTimeStr = totalDuration.toString();
+        
+        // Check if any values actually changed to avoid unnecessary database write
+        boolean needsUpdate = false;
+        if (cookTimeIso != null && !Objects.equals(cookTimeIso, currentCookTime)) {
+            needsUpdate = true;
+        }
+        if (prepTimeIso != null && !Objects.equals(prepTimeIso, currentPrepTime)) {
+            needsUpdate = true;
+        }
+        
+        if (needsUpdate) {
+            String updateSql = "UPDATE recipes SET CookTime = ?, PrepTime = ?, TotalTime = ? WHERE RecipeId = ?";
+            jdbcTemplate.update(updateSql, finalCookTime, finalPrepTime, totalTimeStr, recipeId);
+        }
     }
 
     // 辅助方法：解析时间字符串
