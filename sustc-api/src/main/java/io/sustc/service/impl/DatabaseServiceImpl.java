@@ -43,7 +43,7 @@ public class DatabaseServiceImpl implements DatabaseService {
     @Override
     public List<Integer> getGroupMembers() {
         //replace this with your own student IDs in your group
-        return Arrays.asList(12413009);
+        return Arrays.asList(12413009,12410708);
     }
 
     @Autowired
@@ -59,13 +59,13 @@ public class DatabaseServiceImpl implements DatabaseService {
         // ddl to create tables.
         createTables();
 
-        // TODO: implement your import logic
-        importUsers(userRecords);
-        importUserFollows(userRecords);
-        importRecipes(recipeRecords);
-        importRecipeIngredients(recipeRecords);
-        importReviews(reviewRecords);
-        importReviewLikes(reviewRecords);
+        // 优化：先导入数据，后创建索引和触发器以提升性能
+        importUsersOptimized(userRecords);
+        importUserFollowsOptimized(userRecords);
+        importRecipesOptimized(recipeRecords);
+        importRecipeIngredientsOptimized(recipeRecords);
+        importReviewsOptimized(reviewRecords);
+        importReviewLikesOptimized(reviewRecords);
 
         createTriggers();
         createViews();
@@ -293,6 +293,192 @@ public class DatabaseServiceImpl implements DatabaseService {
         }
     }
 
+    private static final int BATCH_SIZE = 20000; // 优化的批处理大小
+
+    private void importUsersOptimized(List<UserRecord> userRecords) {
+        String sql = "INSERT INTO users (AuthorId, AuthorName, Gender, Age, " +
+                "Followers, Following, Password, IsDeleted) " +
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
+
+        processBatches(userRecords, BATCH_SIZE, (batch) -> {
+            jdbcTemplate.batchUpdate(sql, new BatchPreparedStatementSetter() {
+                @Override
+                public void setValues(PreparedStatement ps, int i) throws SQLException {
+                    UserRecord user = batch.get(i);
+                    ps.setLong(1, user.getAuthorId());
+                    ps.setString(2, user.getAuthorName());
+                    ps.setString(3, user.getGender());
+                    ps.setInt(4, user.getAge());
+                    ps.setInt(5, user.getFollowers());
+                    ps.setInt(6, user.getFollowing());
+                    ps.setString(7, user.getPassword());
+                    ps.setBoolean(8, user.isDeleted());
+                }
+
+                @Override
+                public int getBatchSize() {
+                    return batch.size();
+                }
+            });
+        });
+    }
+
+    private void importUserFollowsOptimized(List<UserRecord> userRecords) {
+        List<Object[]> allFollows = new ArrayList<>();
+        
+        for (UserRecord user : userRecords) {
+            if (user.getFollowingUsers() != null) {
+                for (long followingId : user.getFollowingUsers()) {
+                    allFollows.add(new Object[]{user.getAuthorId(), followingId});
+                }
+            }
+        }
+
+        if (!allFollows.isEmpty()) {
+            String sql = "INSERT INTO user_follows (FollowerId, FollowingId) " +
+                    "VALUES (?, ?) ON CONFLICT DO NOTHING";
+            
+            processBatches(allFollows, BATCH_SIZE, (batch) -> {
+                jdbcTemplate.batchUpdate(sql, batch);
+            });
+        }
+    }
+
+    private void importRecipesOptimized(List<RecipeRecord> recipeRecords) {
+        String sql = "INSERT INTO recipes " +
+                "(RecipeId, Name, AuthorId, CookTime, PrepTime, TotalTime, " +
+                "DatePublished, Description, RecipeCategory, AggregatedRating, ReviewCount, " +
+                "Calories, FatContent, SaturatedFatContent, CholesterolContent, " +
+                "SodiumContent, CarbohydrateContent, FiberContent, SugarContent, " +
+                "ProteinContent, RecipeServings, RecipeYield) " +
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+
+        processBatches(recipeRecords, BATCH_SIZE, (batch) -> {
+            jdbcTemplate.batchUpdate(sql, new BatchPreparedStatementSetter() {
+                @Override
+                public void setValues(PreparedStatement ps, int i) throws SQLException {
+                    RecipeRecord recipe = batch.get(i);
+                    ps.setLong(1, recipe.getRecipeId());
+                    ps.setString(2, recipe.getName());
+                    ps.setLong(3, recipe.getAuthorId());
+                    ps.setString(4, recipe.getCookTime());
+                    ps.setString(5, recipe.getPrepTime());
+                    ps.setString(6, recipe.getTotalTime());
+                    ps.setTimestamp(7, recipe.getDatePublished());
+                    ps.setString(8, recipe.getDescription());
+                    ps.setString(9, recipe.getRecipeCategory());
+
+                    if (recipe.getAggregatedRating() > 0) {
+                        ps.setFloat(10, recipe.getAggregatedRating());
+                    } else {
+                        ps.setNull(10, java.sql.Types.DECIMAL);
+                    }
+                    ps.setInt(11, recipe.getReviewCount());
+
+                    setFloatOrNull(ps, 12, recipe.getCalories());
+                    setFloatOrNull(ps, 13, recipe.getFatContent());
+                    setFloatOrNull(ps, 14, recipe.getSaturatedFatContent());
+                    setFloatOrNull(ps, 15, recipe.getCholesterolContent());
+                    setFloatOrNull(ps, 16, recipe.getSodiumContent());
+                    setFloatOrNull(ps, 17, recipe.getCarbohydrateContent());
+                    setFloatOrNull(ps, 18, recipe.getFiberContent());
+                    setFloatOrNull(ps, 19, recipe.getSugarContent());
+                    setFloatOrNull(ps, 20, recipe.getProteinContent());
+
+                    ps.setString(21, String.valueOf(recipe.getRecipeServings()));
+                    ps.setString(22, recipe.getRecipeYield());
+                }
+
+                @Override
+                public int getBatchSize() {
+                    return batch.size();
+                }
+            });
+        });
+    }
+
+    private void importRecipeIngredientsOptimized(List<RecipeRecord> recipeRecords) {
+        List<Object[]> allIngredients = new ArrayList<>();
+
+        for (RecipeRecord recipe : recipeRecords) {
+            if (recipe.getRecipeIngredientParts() != null) {
+                for (String ingredient : recipe.getRecipeIngredientParts()) {
+                    allIngredients.add(new Object[]{
+                            recipe.getRecipeId(),
+                            ingredient
+                    });
+                }
+            }
+        }
+        
+        if (!allIngredients.isEmpty()) {
+            String sql = "INSERT INTO recipe_ingredients (RecipeId, IngredientPart) " +
+                    "VALUES (?, ?) ON CONFLICT DO NOTHING";
+            
+            processBatches(allIngredients, BATCH_SIZE, (batch) -> {
+                jdbcTemplate.batchUpdate(sql, batch);
+            });
+        }
+    }
+
+    private void importReviewsOptimized(List<ReviewRecord> reviewRecords) {
+        String sql = "INSERT INTO reviews " +
+                "(ReviewId, RecipeId, AuthorId, Rating, Review, DateSubmitted, DateModified) " +
+                "VALUES (?, ?, ?, ?, ?, ?, ?)";
+
+        processBatches(reviewRecords, BATCH_SIZE, (batch) -> {
+            jdbcTemplate.batchUpdate(sql, new BatchPreparedStatementSetter() {
+                @Override
+                public void setValues(PreparedStatement ps, int i) throws SQLException {
+                    ReviewRecord review = batch.get(i);
+                    ps.setLong(1, review.getReviewId());
+                    ps.setLong(2, review.getRecipeId());
+                    ps.setLong(3, review.getAuthorId());
+                    ps.setFloat(4, review.getRating());
+                    ps.setString(5, review.getReview());
+                    ps.setTimestamp(6, review.getDateSubmitted());
+                    ps.setTimestamp(7, review.getDateModified());
+                }
+                
+                @Override
+                public int getBatchSize() {
+                    return batch.size();
+                }
+            });
+        });
+    }
+
+    private void importReviewLikesOptimized(List<ReviewRecord> reviewRecords) {
+        List<Object[]> allLikes = new ArrayList<>();
+        
+        for (ReviewRecord review : reviewRecords) {
+            if (review.getLikes() != null) {
+                for (long userId : review.getLikes()) {
+                    allLikes.add(new Object[]{
+                            review.getReviewId(),
+                            userId
+                    });
+                }
+            }
+        }
+
+        if (!allLikes.isEmpty()) {
+            String sql = "INSERT INTO review_likes (ReviewId, AuthorId) " +
+                    "VALUES (?, ?) ON CONFLICT DO NOTHING";
+            
+            processBatches(allLikes, BATCH_SIZE, (batch) -> {
+                jdbcTemplate.batchUpdate(sql, batch);
+            });
+        }
+    }
+
+    private <T> void processBatches(List<T> items, int batchSize, java.util.function.Consumer<List<T>> processor) {
+        for (int i = 0; i < items.size(); i += batchSize) {
+            int end = Math.min(i + batchSize, items.size());
+            List<T> batch = items.subList(i, end);
+            processor.accept(batch);
+        }
+    }
 
     private void importUsers(List<UserRecord> userRecords) {
         String sql = "INSERT INTO users (AuthorId, AuthorName, Gender, Age, " +

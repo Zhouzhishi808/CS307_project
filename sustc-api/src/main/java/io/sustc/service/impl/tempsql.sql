@@ -202,3 +202,7 @@ CREATE INDEX idx_review_likes_author ON review_likes(AuthorId);
 -- Recipe ingredients table indexes
 CREATE INDEX idx_recipe_ingredients_recipe ON recipe_ingredients(RecipeId);
 
+-- User authentication optimization indexes
+CREATE INDEX idx_users_auth ON users(AuthorId, IsDeleted) WHERE IsDeleted = false;
+CREATE INDEX idx_users_active ON users(IsDeleted) WHERE IsDeleted = false;
+

@@ -572,14 +572,14 @@ public class ReviewServiceImpl implements ReviewService {
             // === 5. 记录成功日志 ===
             logSuccessfulUnlike(reviewId, userId, totalLikes);
 
-            log.debug("[{}] Completed successfully, total likes: {}", METHOD_NAME, totalLikes);
+//            log.debug("[{}] Completed successfully, total likes: {}", METHOD_NAME, totalLikes);
             return totalLikes;
 
         } catch (SecurityException | IllegalArgumentException e) {
-            log.warn("[{}] Failed due to business rule violation: {}", METHOD_NAME, e.getMessage());
+//            log.warn("[{}] Failed due to business rule violation: {}", METHOD_NAME, e.getMessage());
             throw e;
         } catch (Exception e) {
-            log.error("[{}] Failed unexpectedly: {}", METHOD_NAME, e.getMessage(), e);
+//            log.error("[{}] Failed unexpectedly: {}", METHOD_NAME, e.getMessage(), e);
             throw new RuntimeException("Failed to unlike review: " + e.getMessage(), e);
         }
     }
@@ -613,7 +613,7 @@ public class ReviewServiceImpl implements ReviewService {
 
     // 辅助方法：记录成功的取消点赞操作
     private void logSuccessfulUnlike(long reviewId, long userId, long totalLikes) {
-        log.info("User {} unliked review {}. Total likes: {}", userId, reviewId, totalLikes);
+//        log.info("User {} unliked review {}. Total likes: {}", userId, reviewId, totalLikes);
     }
 
     // 辅助方法：处理取消点赞的核心逻辑
@@ -623,9 +623,9 @@ public class ReviewServiceImpl implements ReviewService {
             // 删除点赞记录
             String deleteSql = "DELETE FROM review_likes WHERE AuthorId = ? AND ReviewId = ?";
             jdbcTemplate.update(deleteSql, userId, reviewId);
-            log.debug("User {} removed like from review {}", userId, reviewId);
+//            log.debug("User {} removed like from review {}", userId, reviewId);
         } else {
-            log.debug("User {} had not liked review {}, no action needed", userId, reviewId);
+            //log.debug("User {} had not liked review {}, no action needed", userId, reviewId);
         }
 
         // 返回当前点赞总数
@@ -640,14 +640,15 @@ public class ReviewServiceImpl implements ReviewService {
             Long count = jdbcTemplate.queryForObject(sql, Long.class, userId, reviewId);
             return count != null && count > 0;
         } catch (Exception e) {
-            log.error("Error checking if user {} liked review {}: {}", userId, reviewId, e.getMessage());
+            //log.error("Error checking if user {} liked review {}: {}", userId, reviewId, e.getMessage());
             return false;
         }
     }
 
 
-    @Override
+
     @Cacheable(value = "reviewLists", key = "#recipeId + '_' + #page + '_' + #size + '_' + #sort")
+    @Override
     public PageResult<ReviewRecord> listByRecipe(long recipeId, int page, int size, String sort) {
 //        log.debug("Listing reviews for recipeId: {}, page: {}, size: {}, sort: {}",
 //                recipeId, page, size, sort);
@@ -676,7 +677,7 @@ public class ReviewServiceImpl implements ReviewService {
             Long total = jdbcTemplate.queryForObject(countSql, Long.class, recipeId);
 
             if (total == null || total == 0) {
-                log.debug("No reviews found for recipe {}", recipeId);
+                //log.debug("No reviews found for recipe {}", recipeId);
                 return PageResult.<ReviewRecord>builder()
                         .items(new ArrayList<>())
                         .page(validPage)
@@ -708,10 +709,10 @@ public class ReviewServiceImpl implements ReviewService {
             return result;
 
         } catch (IllegalArgumentException e) {
-            log.warn("listByRecipe failed: {}", e.getMessage());
+            //log.warn("listByRecipe failed: {}", e.getMessage());
             throw e;
         } catch (Exception e) {
-            log.error("Unexpected error in listByRecipe: {}", e.getMessage(), e);
+            //log.error("Unexpected error in listByRecipe: {}", e.getMessage(), e);
             throw new RuntimeException("Failed to list reviews by recipe: " + e.getMessage(), e);
         }
     }
@@ -728,7 +729,7 @@ public class ReviewServiceImpl implements ReviewService {
             case "date_desc":
                 return "ORDER BY r.DateModified DESC, r.ReviewId DESC";
             default:
-                log.warn("Invalid sort parameter '{}', using default 'date_desc'", sort);
+                //log.warn("Invalid sort parameter '{}', using default 'date_desc'", sort);
                 return "ORDER BY r.DateModified DESC, r.ReviewId DESC";
         }
     }
@@ -821,7 +822,7 @@ public class ReviewServiceImpl implements ReviewService {
     @Transactional
     public RecipeRecord refreshRecipeAggregatedRating(long recipeId) {
         final String METHOD_NAME = "refreshRecipeAggregatedRating";
-        log.debug("[{}] Starting for recipeId: {}", METHOD_NAME, recipeId);
+        //log.debug("[{}] Starting for recipeId: {}", METHOD_NAME, recipeId);
 
         try {
             // === 1. 验证参数 ===
@@ -843,16 +844,16 @@ public class ReviewServiceImpl implements ReviewService {
             // === 5. 获取并返回更新后的食谱记录 ===
             RecipeRecord updatedRecipe = getUpdatedRecipeRecord(recipeId);
 
-            log.info("[{}] Successfully refreshed rating for recipe {}: rating={}, reviewCount={}",
-                    METHOD_NAME, recipeId, ratingStats.getAverageRating(), ratingStats.getReviewCount());
+            //log.info("[{}] Successfully refreshed rating for recipe {}: rating={}, reviewCount={}",
+                    //METHOD_NAME, recipeId, ratingStats.getAverageRating(), ratingStats.getReviewCount());
 
             return updatedRecipe;
 
         } catch (IllegalArgumentException e) {
-            log.warn("[{}] Failed: {}", METHOD_NAME, e.getMessage());
+            //log.warn("[{}] Failed: {}", METHOD_NAME, e.getMessage());
             throw e;
         } catch (Exception e) {
-            log.error("[{}] Failed unexpectedly: {}", METHOD_NAME, e.getMessage(), e);
+            //log.error("[{}] Failed unexpectedly: {}", METHOD_NAME, e.getMessage(), e);
             throw new RuntimeException("Failed to refresh recipe rating: " + e.getMessage(), e);
         }
     }
@@ -894,7 +895,7 @@ public class ReviewServiceImpl implements ReviewService {
 
         } catch (EmptyResultDataAccessException e) {
             // 没有评论，评分和评论数都为0
-            log.debug("No reviews found for recipe {}, setting rating to null and count to 0", recipeId);
+            //log.debug("No reviews found for recipe {}, setting rating to null and count to 0", recipeId);
             return new RatingStats(null, 0);
         }
     }
@@ -975,7 +976,7 @@ public class ReviewServiceImpl implements ReviewService {
         try {
             return jdbcTemplate.queryForList(sql, String.class, recipeId);
         } catch (Exception e) {
-            log.warn("Failed to get ingredients for recipe {}: {}", recipeId, e.getMessage());
+            //log.warn("Failed to get ingredients for recipe {}: {}", recipeId, e.getMessage());
             return new ArrayList<>();
         }
     }

@@ -4,6 +4,7 @@ import io.sustc.dto.*;
 
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
@@ -18,6 +19,7 @@ public class PermissionUtils {
     private JdbcTemplate jdbcTemplate;
 
     //检验用户是否存在并验证密码
+    //@Cacheable(value = "userAuth", key = "#auth.authorId + '_' + #auth.password")
     public long validateUser(AuthInfo auth) {
         if (auth == null || auth.getAuthorId() <= 0) {
             log.warn("Invalid auth info: {}", auth);
@@ -30,16 +32,15 @@ public class PermissionUtils {
             return -1L;
         }
 
-        // 查询用户密码
-        String sql = "SELECT Password FROM users WHERE AuthorId = ? AND IsDeleted = false";
+        // 直接验证用户和密码，一次查询完成所有验证
+        String sql = "SELECT CASE WHEN Password = ? THEN AuthorId ELSE -1 END AS result " +
+                    "FROM users WHERE AuthorId = ? AND IsDeleted = false";
         try {
-            String storedPassword = jdbcTemplate.queryForObject(sql, String.class, auth.getAuthorId());
-
-            // 验证密码：支持明文和哈希两种方式
-            if (storedPassword != null &&
-                (storedPassword.equals(auth.getPassword()) ||
-                 PasswordUtil.verifyPassword(auth.getPassword(), storedPassword))) {
-                return auth.getAuthorId();
+            Long result = jdbcTemplate.queryForObject(sql, Long.class, 
+                auth.getPassword(), auth.getAuthorId());
+            
+            if (result != null && result > 0) {
+                return result;
             } else {
                 log.warn("Invalid password for user {}", auth.getAuthorId());
                 return -1L;

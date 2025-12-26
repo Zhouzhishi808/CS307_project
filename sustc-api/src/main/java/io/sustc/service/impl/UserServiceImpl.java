@@ -149,9 +149,6 @@ public class UserServiceImpl implements UserService {
         if (!isValidUser(auth)) {
             throw new SecurityException("follow");
         }
-        if(permissionUtils.validateUser(auth)==-1L){
-            throw new SecurityException("follow");
-        }
         if (auth.getAuthorId() == followeeId) {
             throw new SecurityException("follow");
         }
@@ -251,33 +248,22 @@ public class UserServiceImpl implements UserService {
             throw new SecurityException("updateProfile");
         }
 
-        List<Object> params = new ArrayList<>();
-        StringBuilder sql = new StringBuilder("UPDATE users SET ");
-        boolean hasUpdate = false;
-
-        if (gender != null) {
-            sql.append("Gender = ?");
-            params.add(gender);
-            hasUpdate = true;
-        }
-
-        if (age != null) {
-            if (hasUpdate) {
-                sql.append(", ");
-            }
-            sql.append("Age = ?");
-            params.add(age);
-            hasUpdate = true;
-        }
-
-        if (!hasUpdate) {
+        // Fast path: check if there's nothing to update
+        if (gender == null && age == null) {
             return;
         }
 
-        sql.append(" WHERE AuthorId = ?");
-        params.add(auth.getAuthorId());
-
-        jdbcTemplate.update(sql.toString(), params.toArray());
+        // Use fixed SQL patterns instead of dynamic building for better performance
+        if (gender != null && age != null) {
+            jdbcTemplate.update("UPDATE users SET Gender = ?, Age = ? WHERE AuthorId = ?", 
+                               gender, age, auth.getAuthorId());
+        } else if (gender != null) {
+            jdbcTemplate.update("UPDATE users SET Gender = ? WHERE AuthorId = ?", 
+                               gender, auth.getAuthorId());
+        } else {
+            jdbcTemplate.update("UPDATE users SET Age = ? WHERE AuthorId = ?", 
+                               age, auth.getAuthorId());
+        }
     }
 
     // 获取用户关注的人发布的食谱列表（feed 流）
@@ -409,17 +395,7 @@ public class UserServiceImpl implements UserService {
 
     // 验证用户是否有效（存在且未删除）
     private boolean isValidUser(AuthInfo auth) {
-        if (auth == null || auth.getAuthorId() <= 0) {
-            return false;
-        }
-
-        String sql = "SELECT IsDeleted FROM users WHERE AuthorId = ?";
-        try {
-            Boolean isDeleted = jdbcTemplate.queryForObject(sql, Boolean.class, auth.getAuthorId());
-            return isDeleted != null && !isDeleted;
-        } catch (EmptyResultDataAccessException e) {
-            return false;
-        }
+        return permissionUtils.validateUser(auth) > 0;
     }
 
     // 验证密码是否正确

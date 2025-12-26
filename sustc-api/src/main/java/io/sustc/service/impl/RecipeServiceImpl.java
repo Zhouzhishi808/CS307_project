@@ -6,14 +6,11 @@ import io.sustc.util.PasswordUtil;
 import io.sustc.util.PermissionUtils;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.cache.annotation.Cacheable;
-import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.sql.Array;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
@@ -31,7 +28,6 @@ public class RecipeServiceImpl implements RecipeService {
     private JdbcTemplate jdbcTemplate;
 
     @Override
-    @Cacheable(value = "recipeNames", key = "#id")
     public String getNameFromID(long id) {
         if (id <= 0) {
             return null;
@@ -49,7 +45,6 @@ public class RecipeServiceImpl implements RecipeService {
     }
 
     @Override
-    @Cacheable(value = "recipes", key = "#recipeId")
     public RecipeRecord getRecipeById(long recipeId) {
         // 1. 参数验证
         if (recipeId <= 0) {
@@ -57,12 +52,12 @@ public class RecipeServiceImpl implements RecipeService {
         }
 
         try {
-            // 2. 使用优化视图，一次查询获取所有数据包括食材，消除N+1查询
-            String sql = "SELECT r.*, u.AuthorName FROM v_recipe_full_info r " +
+            // 2. 简单高效查询 - 直接查询recipes表，适合小数据集
+            String sql = "SELECT r.*, u.AuthorName FROM recipes r " +
                     "LEFT JOIN users u ON r.AuthorId = u.AuthorId " +
                     "WHERE r.RecipeId = ?";
             RecipeRecord recipe = jdbcTemplate.queryForObject(sql, (rs, rowNum) -> {
-                return mapResultSetToRecipeRecordFromView(rs);
+                return mapResultSetToRecipeRecord(rs, true);  // 获取食材
             }, recipeId);
 
             return recipe;
@@ -169,64 +164,6 @@ public class RecipeServiceImpl implements RecipeService {
         return rs.wasNull() ? null : value;
     }
 
-    // 辅助方法：从视图中映射食谱记录（已包含食材数组）
-    private RecipeRecord mapResultSetToRecipeRecordFromView(ResultSet rs) throws SQLException {
-        RecipeRecord recipe = new RecipeRecord();
-
-        // 设置基本字段
-        recipe.setRecipeId(rs.getLong("RecipeId"));
-        recipe.setName(rs.getString("Name"));
-        recipe.setAuthorId(rs.getLong("AuthorId"));
-        recipe.setAuthorName(rs.getString("AuthorName"));
-
-        recipe.setCookTime(rs.getString("CookTime"));
-        recipe.setPrepTime(rs.getString("PrepTime"));
-        recipe.setTotalTime(rs.getString("TotalTime"));
-        recipe.setDatePublished(rs.getTimestamp("DatePublished"));
-        recipe.setDescription(rs.getString("Description"));
-        recipe.setRecipeCategory(rs.getString("RecipeCategory"));
-
-        // 处理评分（可能为null）
-        Float aggregatedRating = getNullableFloat(rs, "AggregatedRating");
-        recipe.setAggregatedRating(aggregatedRating != null ? aggregatedRating : 0.0f);
-        recipe.setReviewCount(rs.getInt("ReviewCount"));
-
-        // 处理营养信息（可能为null）
-        recipe.setCalories(getSafeFloat(rs, "Calories"));
-        recipe.setFatContent(getSafeFloat(rs, "FatContent"));
-        recipe.setSaturatedFatContent(getSafeFloat(rs, "SaturatedFatContent"));
-        recipe.setCholesterolContent(getSafeFloat(rs, "CholesterolContent"));
-        recipe.setSodiumContent(getSafeFloat(rs, "SodiumContent"));
-        recipe.setCarbohydrateContent(getSafeFloat(rs, "CarbohydrateContent"));
-        recipe.setFiberContent(getSafeFloat(rs, "FiberContent"));
-        recipe.setSugarContent(getSafeFloat(rs, "SugarContent"));
-        recipe.setProteinContent(getSafeFloat(rs, "ProteinContent"));
-
-        // 处理servings（存储为VARCHAR，需要转换为int）
-        String servingsStr = rs.getString("RecipeServings");
-        int servings = 0;
-        if (servingsStr != null && !servingsStr.trim().isEmpty()) {
-            try {
-                servings = Integer.parseInt(servingsStr.trim());
-            } catch (NumberFormatException e) {
-                servings = 0;
-            }
-        }
-        recipe.setRecipeServings(servings);
-
-        recipe.setRecipeYield(rs.getString("RecipeYield"));
-
-        // 从视图中直接获取食材数组（已排序）
-        Array ingredientArray = rs.getArray("RecipeIngredientParts");
-        if (ingredientArray != null) {
-            String[] ingredients = (String[]) ingredientArray.getArray();
-            recipe.setRecipeIngredientParts(ingredients);
-        } else {
-            recipe.setRecipeIngredientParts(new String[0]);
-        }
-
-        return recipe;
-    }
     
     // 保留原方法以兼容其他地方的调用
     private String[] getRecipeIngredientsArray(long recipeId) {
@@ -285,8 +222,8 @@ public class RecipeServiceImpl implements RecipeService {
         // 构建排序子句
         String orderByClause = buildOrderByClause(sort);
 
-        // 查询总记录数（使用视图以保持一致性）
-        String countSql = "SELECT COUNT(*) FROM v_recipe_full_info r" + whereClause.toString();
+        // 查询总记录数 - 直接查询recipes表，避免复杂视图
+        String countSql = "SELECT COUNT(*) FROM recipes r" + whereClause.toString();
         Long total = jdbcTemplate.queryForObject(countSql, Long.class, params.toArray());
         if (total == null) total = 0L;
 
@@ -305,14 +242,14 @@ public class RecipeServiceImpl implements RecipeService {
         queryParams.add(validSize);
         queryParams.add((validPage - 1) * validSize);
 
-        // 执行查询 - 使用优化的视图查询
-        String optimizedQuerySql = "SELECT r.*, u.AuthorName FROM v_recipe_full_info r " +
+        // 执行查询 - 简单高效查询，适合小数据集
+        String querySQL = "SELECT r.*, u.AuthorName FROM recipes r " +
                 "LEFT JOIN users u ON r.AuthorId = u.AuthorId " +
                 whereClause.toString() +
                 " " + orderByClause + " LIMIT ? OFFSET ?";
         
-        List<RecipeRecord> recipes = jdbcTemplate.query(optimizedQuerySql, queryParams.toArray(), (rs, rowNum) ->
-            mapResultSetToRecipeRecordFromView(rs)  // 使用视图版本的映射方法
+        List<RecipeRecord> recipes = jdbcTemplate.query(querySQL, queryParams.toArray(), (rs, rowNum) ->
+            mapResultSetToRecipeRecord(rs, true)  // 使用标准映射方法
         );
 
         return PageResult.<RecipeRecord>builder()
@@ -352,7 +289,6 @@ public class RecipeServiceImpl implements RecipeService {
 
     @Override
     @Transactional
-    @CacheEvict(value = {"recipes", "recipeNames", "recipeSearch"}, allEntries = true)
     public long createRecipe(RecipeRecord dto, AuthInfo auth) {
         // 1. 验证权限
         if (auth == null) {
@@ -503,7 +439,6 @@ public class RecipeServiceImpl implements RecipeService {
 
     @Override
     @Transactional
-    @CacheEvict(value = {"recipes", "recipeNames", "recipeSearch"}, allEntries = true)
     public void deleteRecipe(long recipeId, AuthInfo auth) {
         // 1. 验证权限
         if (!validateAuthAndPermission(auth)) {
