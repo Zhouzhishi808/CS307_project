@@ -32,14 +32,13 @@ public class PermissionUtils {
             return -1L;
         }
 
-        // 直接验证用户和密码，一次查询完成所有验证
-        String sql = "SELECT CASE WHEN Password = ? THEN AuthorId ELSE -1 END AS result " +
-                    "FROM users WHERE AuthorId = ? AND IsDeleted = false";
+        // 简化查询，直接检查用户和密码是否匹配
+        String sql = "SELECT AuthorId FROM users WHERE AuthorId = ? AND Password = ? AND IsDeleted = false";
         try {
             Long result = jdbcTemplate.queryForObject(sql, Long.class, 
-                auth.getPassword(), auth.getAuthorId());
+                auth.getAuthorId(), auth.getPassword());
             
-            if (result != null && result > 0) {
+            if (result != null) {
                 return result;
             } else {
                 log.warn("Invalid password for user {}", auth.getAuthorId());
