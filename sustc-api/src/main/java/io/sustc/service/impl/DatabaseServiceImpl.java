@@ -749,31 +749,45 @@ public class DatabaseServiceImpl implements DatabaseService {
 
     @Override
     public void drop() {
-//        jdbcTemplate.execute("DROP TRIGGER IF EXISTS trg_update_follow_counts ON user_follows");
-//        jdbcTemplate.execute("DROP TRIGGER IF EXISTS trg_refresh_recipe_rating ON reviews");
-//        jdbcTemplate.execute("DROP FUNCTION IF EXISTS update_follow_counts() CASCADE");
-//        jdbcTemplate.execute("DROP FUNCTION IF EXISTS refresh_recipe_rating() CASCADE");
-//        jdbcTemplate.execute("DROP VIEW IF EXISTS v_user_full_info CASCADE");
-//        jdbcTemplate.execute("DROP VIEW IF EXISTS v_recipe_full_info CASCADE");
-        String sql = "DO $$\n" +
-                "DECLARE\n" +
-                "    tables CURSOR FOR\n" +
-                "        SELECT tablename\n" +
-                "        FROM pg_tables\n" +
-                "        WHERE schemaname = 'public';\n" +
-                "BEGIN\n" +
-                "    FOR t IN tables\n" +
-                "    LOOP\n" +
-                "        EXECUTE 'DROP TABLE IF EXISTS ' || QUOTE_IDENT(t.tablename) || ' CASCADE;';\n" +
-                "    END LOOP;\n" +
-                "END $$;\n";
-        try (Connection conn = dataSource.getConnection();
-             PreparedStatement stmt = conn.prepareStatement(sql)) {
-            stmt.executeUpdate();
-        } catch (SQLException e) {
-            throw new RuntimeException(e);
+        try {
+            // 1. 删除触发器和函数（如果存在）
+            jdbcTemplate.execute("DROP TRIGGER IF EXISTS trg_update_follow_counts ON user_follows CASCADE");
+            jdbcTemplate.execute("DROP TRIGGER IF EXISTS trg_refresh_recipe_rating ON reviews CASCADE");
+            jdbcTemplate.execute("DROP FUNCTION IF EXISTS update_follow_counts() CASCADE");
+            jdbcTemplate.execute("DROP FUNCTION IF EXISTS refresh_recipe_rating() CASCADE");
+            jdbcTemplate.execute("DROP FUNCTION IF EXISTS get_user_with_follows(BIGINT) CASCADE");
+            jdbcTemplate.execute("DROP FUNCTION IF EXISTS get_recipe_with_ingredients(BIGINT) CASCADE");
+            
+            // 2. 删除视图
+            jdbcTemplate.execute("DROP VIEW IF EXISTS v_user_full_info CASCADE");
+            jdbcTemplate.execute("DROP VIEW IF EXISTS v_recipe_full_info CASCADE");
+            jdbcTemplate.execute("DROP VIEW IF EXISTS v_review_with_likes CASCADE");
+            
+            // 3. 删除所有用户表
+            String dropTablesSql = "DO $$\n" +
+                    "DECLARE\n" +
+                    "    tables CURSOR FOR\n" +
+                    "        SELECT tablename\n" +
+                    "        FROM pg_tables\n" +
+                    "        WHERE schemaname = 'public';\n" +
+                    "BEGIN\n" +
+                    "    FOR t IN tables\n" +
+                    "    LOOP\n" +
+                    "        EXECUTE 'DROP TABLE IF EXISTS ' || QUOTE_IDENT(t.tablename) || ' CASCADE;';\n" +
+                    "    END LOOP;\n" +
+                    "END $$;";
+            
+            jdbcTemplate.execute(dropTablesSql);
+            
+            // 4. 可选：删除扩展（如果不影响其他应用）
+            // jdbcTemplate.execute("DROP EXTENSION IF EXISTS pg_trgm CASCADE");
+            
+            log.info("Successfully dropped all database objects");
+            
+        } catch (Exception e) {
+            log.error("Error during database drop: {}", e.getMessage(), e);
+            throw new RuntimeException("Failed to drop database objects", e);
         }
-        // jdbcTemplate.execute("DROP EXTENSION IF EXISTS pg_trgm CASCADE");
     }
 
     @Override

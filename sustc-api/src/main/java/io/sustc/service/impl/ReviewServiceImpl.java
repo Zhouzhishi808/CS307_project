@@ -49,27 +49,29 @@ public class ReviewServiceImpl implements ReviewService {
                 throw new SecurityException("Invalid or inactive user");
             }
             
-            // 小数据集优化：在插入时检查食谱存在性，避免额外查询
-            long newReviewId = permissionUtils.generateNewId("reviews", "ReviewId");
-            Timestamp now = Timestamp.from(Instant.now());
+            // 小数据集优化：使用数据库序列生成ID，避免额外查询
+            String insertSql = "INSERT INTO reviews (ReviewId, RecipeId, AuthorId, Rating, Review, DateSubmitted, DateModified) " +
+                    "VALUES (COALESCE((SELECT MAX(ReviewId) FROM reviews), 0) + 1, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP) " +
+                    "RETURNING ReviewId";
             
             try {
-                String insertSql = "INSERT INTO reviews (ReviewId, RecipeId, AuthorId, Rating, Review, DateSubmitted, DateModified) " +
-                        "VALUES (?, ?, ?, ?, ?, ?, ?)";
-                int rowsInserted = jdbcTemplate.update(insertSql,
-                        newReviewId, recipeId, userId, rating, review.trim(), now, now);
-                if (rowsInserted != 1) {
-                    throw new RuntimeException("Failed to insert review - unexpected row count: " + rowsInserted);
+                Long newReviewId = jdbcTemplate.queryForObject(insertSql, Long.class, 
+                        recipeId, userId, rating, review.trim());
+                
+                if (newReviewId == null) {
+                    throw new RuntimeException("Failed to insert review - no ID returned");
                 }
-            } catch (Exception e) {
-                if (e.getMessage() != null && e.getMessage().contains("foreign key")) {
+                
+                // 小数据集优化：合并rating更新到单个SQL操作
+                updateRecipeRatingOptimized(recipeId);
+                return newReviewId;
+                
+            } catch (org.springframework.dao.DataIntegrityViolationException e) {
+                if (e.getMessage() != null && e.getMessage().toLowerCase().contains("foreign key")) {
                     throw new IllegalArgumentException("Recipe does not exist");
                 }
-                throw e;
+                throw new RuntimeException("Database constraint violation: " + e.getMessage(), e);
             }
-            
-            updateRecipeRatingQuickly(recipeId);
-            return newReviewId;
         } catch (SecurityException | IllegalArgumentException e) {
             throw e;
         } catch (Exception e) {
@@ -80,6 +82,9 @@ public class ReviewServiceImpl implements ReviewService {
     private void validateAddReviewParameters(AuthInfo auth, int rating, String review) {
         if (auth == null || auth.getAuthorId() <= 0) {
             throw new IllegalArgumentException("Authentication info is required");
+        }
+        if (auth.getPassword() == null || auth.getPassword().trim().isEmpty()) {
+            throw new IllegalArgumentException("Password is required for user validation");
         }
         if (rating < 1 || rating > 5) {
             throw new IllegalArgumentException("Rating must be between 1 and 5");
@@ -375,7 +380,18 @@ public class ReviewServiceImpl implements ReviewService {
     }
 
     private void validateUnlikeReviewBusinessRules(long reviewId) {
-        // 小数据集下直接在操作时检查即可，避免额外查询
+        String sql = "SELECT EXISTS(SELECT 1 FROM reviews WHERE ReviewId = ?)";
+        try {
+            Boolean exists = jdbcTemplate.queryForObject(sql, Boolean.class, reviewId);
+            if (exists == null || !exists) {
+                throw new IllegalArgumentException("Review with ID " + reviewId + " does not exist");
+            }
+        } catch (Exception e) {
+            if (e instanceof IllegalArgumentException) {
+                throw e;
+            }
+            throw new RuntimeException("Failed to validate review existence: " + e.getMessage(), e);
+        }
     }
 
 
@@ -400,138 +416,140 @@ public class ReviewServiceImpl implements ReviewService {
 
     @Override
     public PageResult<ReviewRecord> listByRecipe(long recipeId, int page, int size, String sort) {
+        // 验证参数
+        if (recipeId <= 0) {
+            throw new IllegalArgumentException("Recipe ID must be > 0");
+        }
+        if (page < 1) {
+            throw new IllegalArgumentException("Page must be >= 1");
+        }
+        if (size <= 0) {
+            throw new IllegalArgumentException("Size must be > 0");
+        }
+        
+        // 计算偏移量
+        int offset = (page - 1) * size;
+        
+        // 确定排序方式
+        String orderBy = getOrderByClause(sort);
+        
+        // 查询总数
+        String countSql = "SELECT COUNT(*) FROM reviews WHERE RecipeId = ?";
+        Long total;
         try {
-            if (recipeId <= 0) {
-                throw new IllegalArgumentException("Recipe ID must be positive");
+            total = jdbcTemplate.queryForObject(countSql, Long.class, recipeId);
+            if (total == null) {
+                total = 0L;
             }
-            if (page < 1) {
-                throw new IllegalArgumentException("Page must be >= 1");
-            }
-            if (size <= 0) {
-                throw new IllegalArgumentException("Size must be > 0");
-            }
-
-            int validSize = Math.max(1, Math.min(size, 200));
-            int validPage = Math.max(1, page);
-            int offset = (validPage - 1) * validSize;
-
-            String countSql = "SELECT COUNT(*) FROM reviews WHERE RecipeId = ?";
-            Long total = jdbcTemplate.queryForObject(countSql, Long.class, recipeId);
-
-            if (total == null || total == 0) {
-                return PageResult.<ReviewRecord>builder()
-                        .items(new ArrayList<>())
-                        .page(validPage)
-                        .size(validSize)
-                        .total(0L)
-                        .build();
-            }
-
-            String orderByClause = buildOrderByClause(sort);
-            String querySql = buildQuerySql(orderByClause);
-            List<ReviewRecord> reviews = executePaginatedQuery(recipeId, querySql, validSize, offset);
-
-            return PageResult.<ReviewRecord>builder()
-                    .items(reviews)
-                    .page(validPage)
-                    .size(validSize)
-                    .total(total)
-                    .build();
-
-        } catch (IllegalArgumentException e) {
-            throw e;
         } catch (Exception e) {
-            throw new RuntimeException("Failed to list reviews by recipe: " + e.getMessage(), e);
+            total = 0L;
         }
-    }
-
-    private String buildOrderByClause(String sort) {
-        // 小数据集优化：简化排序，避免复杂计算
-        if (sort != null && "likes_desc".equals(sort.toLowerCase())) {
-            return "ORDER BY r.ReviewId DESC"; // 用ReviewId代替复杂的点赞数排序
+        
+        if (total == 0) {
+            return PageResult.<ReviewRecord>builder()
+                    .items(new ArrayList<>())
+                    .page(page)
+                    .size(size)
+                    .total(0L)
+                    .build();
         }
-        return "ORDER BY r.DateModified DESC, r.ReviewId DESC";
-    }
-
-    private String buildQuerySql(String orderByClause) {
-        // 小数据集优化：简化查询，避免复杂连接
-        return "SELECT r.*, u.AuthorName FROM reviews r " +
-               "LEFT JOIN users u ON r.AuthorId = u.AuthorId " +
-               "WHERE r.RecipeId = ? " +
-               orderByClause + " " +
-               "LIMIT ? OFFSET ?";
-    }
-
-    private List<ReviewRecord> executePaginatedQuery(long recipeId, String sql, int limit, int offset) {
+        
+        // 优化：一次查询获取所有数据包括likes
+        String dataSql = "SELECT r.*, u.AuthorName, " +
+                        "COALESCE((SELECT array_agg(rl.AuthorId ORDER BY rl.AuthorId) " +
+                        "FROM review_likes rl WHERE rl.ReviewId = r.ReviewId), '{}') as likes " +
+                        "FROM reviews r " +
+                        "LEFT JOIN users u ON r.AuthorId = u.AuthorId " +
+                        "WHERE r.RecipeId = ? " +
+                        orderBy + " " +
+                        "LIMIT ? OFFSET ?";
+        
         List<ReviewRecord> reviews = jdbcTemplate.query(
-                sql,
-                new Object[]{recipeId, limit, offset},
-                (rs, rowNum) -> {
-                    ReviewRecord review = new ReviewRecord();
-                    review.setReviewId(rs.getLong("ReviewId"));
-                    review.setRecipeId(rs.getLong("RecipeId"));
-                    review.setAuthorId(rs.getLong("AuthorId"));
-                    review.setAuthorName(rs.getString("AuthorName"));
-                    review.setRating((float) rs.getInt("Rating"));
-                    review.setReview(rs.getString("Review"));
-                    
-                    Timestamp dateSubmitted = rs.getTimestamp("DateSubmitted");
-                    Timestamp dateModified = rs.getTimestamp("DateModified");
-                    if (dateSubmitted != null) {
-                        review.setDateSubmitted(dateSubmitted);
-                    }
-                    if (dateModified != null) {
-                        review.setDateModified(dateModified);
-                    }
-                    return review;
+            dataSql,
+            new Object[]{recipeId, size, offset},
+            (rs, rowNum) -> {
+                ReviewRecord review = new ReviewRecord();
+                review.setReviewId(rs.getLong("ReviewId"));
+                review.setRecipeId(rs.getLong("RecipeId"));
+                review.setAuthorId(rs.getLong("AuthorId"));
+                
+                String authorName = rs.getString("AuthorName");
+                review.setAuthorName(authorName != null ? authorName : "Unknown User");
+                
+                review.setRating((float) rs.getInt("Rating"));
+                review.setReview(rs.getString("Review"));
+                
+                Timestamp dateSubmitted = rs.getTimestamp("DateSubmitted");
+                if (dateSubmitted != null) {
+                    review.setDateSubmitted(dateSubmitted);
                 }
-        );
-        
-        if (!reviews.isEmpty()) {
-            setLikesForReviews(reviews);
-        }
-        
-        return reviews;
-    }
-
-    private void setLikesForReviews(List<ReviewRecord> reviews) {
-        // 小数据集优化：简化点赞查询，优先使用逐个查询避免IN查询开销
-        if (reviews.size() <= 10) {
-            // 对于小量数据，逐个查询更快
-            for (ReviewRecord review : reviews) {
-                String sql = "SELECT AuthorId FROM review_likes WHERE ReviewId = ? ORDER BY AuthorId";
+                
+                Timestamp dateModified = rs.getTimestamp("DateModified");
+                if (dateModified != null) {
+                    review.setDateModified(dateModified);
+                }
+                
+                // 处理likes数组
                 try {
-                    List<Long> likes = jdbcTemplate.queryForList(sql, Long.class, review.getReviewId());
-                    review.setLikes(likes.stream().mapToLong(Long::longValue).toArray());
+                    Array likesArray = rs.getArray("likes");
+                    if (likesArray != null) {
+                        Long[] likesData = (Long[]) likesArray.getArray();
+                        if (likesData != null) {
+                            review.setLikes(Arrays.stream(likesData).mapToLong(Long::longValue).toArray());
+                        } else {
+                            review.setLikes(new long[0]);
+                        }
+                    } else {
+                        review.setLikes(new long[0]);
+                    }
                 } catch (Exception e) {
                     review.setLikes(new long[0]);
                 }
+                
+                return review;
             }
+        );
+        
+        return PageResult.<ReviewRecord>builder()
+                .items(reviews)
+                .page(page)
+                .size(size)
+                .total(total)
+                .build();
+    }
+
+    private String getOrderByClause(String sort) {
+        if (sort == null || sort.trim().isEmpty()) {
+            // 默认排序：使用ReviewId确保稳定性
+            return "ORDER BY r.ReviewId DESC";
+        } else if ("date_desc".equals(sort)) {
+            return "ORDER BY r.DateModified DESC, r.ReviewId DESC";
+        } else if ("likes_desc".equals(sort)) {
+            return "ORDER BY (SELECT COUNT(*) FROM review_likes WHERE ReviewId = r.ReviewId) DESC, r.ReviewId DESC";
         } else {
-            // 对于较大数据，使用批量查询
-            List<Long> reviewIds = reviews.stream().map(ReviewRecord::getReviewId).toList();
-            String placeholders = String.join(",", reviewIds.stream().map(id -> "?").toList());
-            String likesQuery = "SELECT ReviewId, AuthorId FROM review_likes WHERE ReviewId IN (" +
-                    placeholders + ") ORDER BY ReviewId, AuthorId";
-            
-            Map<Long, List<Long>> likesMap = new HashMap<>();
-            jdbcTemplate.query(likesQuery, reviewIds.toArray(), (rs) -> {
-                long reviewId = rs.getLong("ReviewId");
-                long authorId = rs.getLong("AuthorId");
-                likesMap.computeIfAbsent(reviewId, k -> new ArrayList<>()).add(authorId);
-            });
-            
-            for (ReviewRecord review : reviews) {
-                List<Long> likes = likesMap.getOrDefault(review.getReviewId(), Collections.emptyList());
-                review.setLikes(likes.stream().mapToLong(Long::longValue).toArray());
-            }
+            // 无效的sort参数，使用默认排序
+            return "ORDER BY r.ReviewId DESC";
         }
     }
+
 
 
     private void updateRecipeRatingQuickly(long recipeId) {
         try {
             calculateRecipeRatingStats(recipeId);
+        } catch (Exception e) {
+            // 忽略错误，不影响主操作
+        }
+    }
+    
+    private void updateRecipeRatingOptimized(long recipeId) {
+        try {
+            // 小数据集优化：单个SQL直接更新rating统计
+            String updateSql = "UPDATE recipes SET " +
+                    "AggregatedRating = (SELECT ROUND(AVG(Rating)::numeric, 2) FROM reviews WHERE RecipeId = ?), " +
+                    "ReviewCount = (SELECT COUNT(*)::INTEGER FROM reviews WHERE RecipeId = ?) " +
+                    "WHERE RecipeId = ?";
+            jdbcTemplate.update(updateSql, recipeId, recipeId, recipeId);
         } catch (Exception e) {
             // 忽略错误，不影响主操作
         }
