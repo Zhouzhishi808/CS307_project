@@ -27,22 +27,16 @@ public class RecipeServiceImpl implements RecipeService {
     private PermissionUtils permissionUtils;
     @Autowired
     private JdbcTemplate jdbcTemplate;
-
+    
     @Override
     public String getNameFromID(long id) {
         if (id <= 0) {
             return null;
         }
 
-        try {
-            String sql = "SELECT Name FROM recipes WHERE RecipeId = ?";
-            return jdbcTemplate.queryForObject(sql, String.class, id);
-        } catch (EmptyResultDataAccessException e) {
-            return null;
-        } catch (Exception e) {
-            log.error("Error getting recipe name by ID {}: {}", id, e.getMessage(), e);
-            return null;
-        }
+        String sql = "SELECT Name FROM recipes WHERE RecipeId = ?";
+        List<String> result = jdbcTemplate.query(sql, (rs, rowNum) -> rs.getString("Name"), id);
+        return result.isEmpty() ? null : result.get(0);
     }
 
     @Override
@@ -373,6 +367,7 @@ public class RecipeServiceImpl implements RecipeService {
             insertRecipeIngredients(newRecipeId, dto.getRecipeIngredientParts());
         }
 
+
         log.info("Recipe created successfully: ID={}, Name={}, Author={}",
                 newRecipeId, dto.getName(), auth.getAuthorId());
 
@@ -509,6 +504,7 @@ public class RecipeServiceImpl implements RecipeService {
 
         // 3.4 删除食谱
         deleteRecipeRecord(recipeId);
+
 
         log.info("Recipe deleted successfully: ID={}, Author={}", recipeId, auth.getAuthorId());
     }

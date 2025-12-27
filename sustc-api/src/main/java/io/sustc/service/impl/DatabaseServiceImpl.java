@@ -278,6 +278,7 @@ public class DatabaseServiceImpl implements DatabaseService {
                 //复合索引
                 "CREATE INDEX IF NOT EXISTS idx_recipes_author_date ON recipes(AuthorId, DatePublished DESC)",
                 "CREATE INDEX IF NOT EXISTS idx_feed_optimization ON user_follows(FollowerId) INCLUDE (FollowingId)",
+                "CREATE INDEX IF NOT EXISTS idx_recipes_id_name ON recipes(RecipeId) INCLUDE (Name)",
 
                 //启用pg_trgm扩展
                 "CREATE EXTENSION IF NOT EXISTS pg_trgm",
